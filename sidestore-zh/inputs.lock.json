@@ -1,0 +1,13 @@
+{
+  "schema": 1,
+  "sources": {
+    "SideStore": {"url": "https://github.com/SideStore/SideStore.git", "ref": "refs/heads/develop", "commit": "d97ec133719d79916675bdaf722b82a8d091d545"},
+    "LiveContainer": {"url": "https://github.com/LiveContainer/LiveContainer.git", "ref": "refs/heads/main", "commit": "4dbe0f9a626de801184a42c0be8d2cb105058e3d"},
+    "dylibify": {"url": "https://github.com/LiveContainer/dylibify.git", "commit": "5daf713df9fb07724510490c88aa8e00061be14a"}
+  },
+  "files": {
+    "patches/SideStore-zh.patch": "da8b6013b0e0a71c2a70e8c9b83e23a2ee98e03856772d48da1c2797a3c32f7a",
+    "resources/Localizable.strings": "57340f2563dcc1ed0f2e15e6c91e10b39cec5d57061916fce7aa02555fcbb622",
+    "Package.resolved": "6d7132654332f9ba8c22dcf5cb79d8f1016f532a9e89cc4bba1e87bac27cfadc"
+  }
+}

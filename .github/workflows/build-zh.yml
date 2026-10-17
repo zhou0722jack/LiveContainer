@@ -1,0 +1,97 @@
+name: Build Chinese LiveContainer + SideStore
+
+on:
+  workflow_dispatch:
+    inputs:
+      pinned:
+        description: Use historical pinned commits instead of latest upstream
+        type: boolean
+        default: false
+  schedule:
+    - cron: '0 0 * * *'
+  push:
+    paths:
+      - '.github/workflows/build-zh.yml'
+      - 'sidestore-zh/**'
+
+permissions:
+  contents: read
+
+concurrency:
+  group: sidestore-zh-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  build:
+    runs-on: macos-26
+    timeout-minutes: 90
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - name: Check pipeline behavior
+        run: python3 -m unittest discover -s sidestore-zh/tests -v
+      - uses: maxim-lobanov/setup-xcode@v1.6.0
+        with:
+          xcode-version: ${{ vars.XCODE_VERSION || '26.4' }}
+      - name: Restore last successful input state
+        uses: actions/cache/restore@v4
+        with:
+          path: sidestore-zh/.last-success
+          key: zh-state-${{ github.ref_name }}-${{ github.run_id }}-${{ github.run_attempt }}
+          restore-keys: zh-state-${{ github.ref_name }}-
+      - name: Check both upstreams
+        id: check
+        env:
+          USE_PINNED: ${{ inputs.pinned }}
+        run: |
+          args=()
+          if [[ "$USE_PINNED" == 'true' ]]; then args+=(--pinned); fi
+          python3 -u sidestore-zh/build.py check "${args[@]}"
+      - name: Record toolchain
+        if: steps.check.outputs.should_build == 'true'
+        run: |
+          xcodebuild -version
+          xcrun --sdk iphoneos --show-sdk-version
+          python3 --version
+      - name: Prepare pinned inputs and translation
+        if: steps.check.outputs.should_build == 'true'
+        run: python3 -u sidestore-zh/build.py prepare
+      - name: Compile both projects from source
+        if: steps.check.outputs.should_build == 'true'
+        run: python3 -u sidestore-zh/build.py build
+      - name: Package and verify integration
+        if: steps.check.outputs.should_build == 'true'
+        run: python3 -u sidestore-zh/build.py package
+      - name: Upload IPA and verification
+        if: steps.check.outputs.should_build == 'true'
+        uses: actions/upload-artifact@v4
+        with:
+          name: LiveContainer-SideStore-zh-Hans
+          path: sidestore-zh/.build/outputs/*
+          if-no-files-found: error
+          retention-days: 30
+      - name: Record successful build
+        if: steps.check.outputs.should_build == 'true'
+        run: python3 sidestore-zh/build.py mark-success
+      - name: Save successful input state
+        if: steps.check.outputs.should_build == 'true'
+        uses: actions/cache/save@v4
+        with:
+          path: sidestore-zh/.last-success
+          key: zh-state-${{ github.ref_name }}-${{ github.run_id }}-${{ github.run_attempt }}
+      - name: Upload diagnostic logs
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: zh-build-logs
+          path: |
+            sidestore-zh/.build/work/*.log
+            sidestore-zh/.build/work/*audit.json
+            sidestore-zh/.build/work/build-provenance.json
+            sidestore-zh/.build/candidate.json
+          if-no-files-found: ignore
+          retention-days: 14
