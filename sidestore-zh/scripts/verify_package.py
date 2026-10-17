@@ -72,8 +72,9 @@ with zipfile.ZipFile(ipa) as package, zipfile.ZipFile(WORK / 'lc-nightly.ipa') a
         minimal_home = (WORK / 'LiveContainer/LiveContainerSwiftUI/Views/LCTabView.swift').read_text()
         check('minimal_four_actions_in_source', all(text in minimal_home
               for text in ['侧载 App', '刷新 App', '容器安装 App', '登录账号']))
-        check('minimal_container_action_compiled', '容器安装 App'.encode() in package.read(top + 'LiveContainer'))
-        check('minimal_sidestore_routing_compiled', b'sidestore://minimal/' in package.read(top + 'LiveContainer'))
+        minimal_ui_binary = package.read(top + 'Frameworks/LiveContainerSwiftUI.framework/LiveContainerSwiftUI')
+        check('minimal_container_action_compiled', '容器安装 App'.encode() in minimal_ui_binary)
+        check('minimal_sidestore_routing_compiled', b'sidestore://minimal/' in minimal_ui_binary)
         check('minimal_sideload_controller_compiled', b'MinimalSideStoreViewController' in package.read(guest + 'SideStore'))
         check('minimal_return_bridge_compiled', b'LCSideStoreReturnToMinimalHome' in package.read(top + 'Frameworks/SideStoreSupport.framework/SideStoreSupport'))
         check('minimal_no_builtin_vpn', not any('LocalVPN.appex/' in name for name in names))
