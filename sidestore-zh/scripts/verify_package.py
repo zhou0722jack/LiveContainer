@@ -67,8 +67,13 @@ with zipfile.ZipFile(ipa) as package, zipfile.ZipFile(WORK / 'lc-nightly.ipa') a
     if variant == 'minimal':
         check('minimal_display_name', host_info.get('CFBundleDisplayName') == '极简' and host_info.get('LCMinimalVariant') is True)
         check('minimal_host_identifier_unchanged', host_info['CFBundleIdentifier'] == 'com.kdt.livecontainer')
-        check('minimal_four_actions_compiled', all(value in package.read(top + 'LiveContainer')
-              for value in [text.encode() for text in ['侧载 App', '刷新 App', '容器安装 App', '登录账号']]))
+        # Swift can encode short strings in instructions rather than a string section.
+        # Confirm the complete source menu plus stable, long compiled UI/routing strings.
+        minimal_home = (WORK / 'LiveContainer/LiveContainerSwiftUI/Views/LCTabView.swift').read_text()
+        check('minimal_four_actions_in_source', all(text in minimal_home
+              for text in ['侧载 App', '刷新 App', '容器安装 App', '登录账号']))
+        check('minimal_container_action_compiled', '容器安装 App'.encode() in package.read(top + 'LiveContainer'))
+        check('minimal_sidestore_routing_compiled', b'sidestore://minimal/' in package.read(top + 'LiveContainer'))
         check('minimal_sideload_controller_compiled', b'MinimalSideStoreViewController' in package.read(guest + 'SideStore'))
         check('minimal_return_bridge_compiled', b'LCSideStoreReturnToMinimalHome' in package.read(top + 'Frameworks/SideStoreSupport.framework/SideStoreSupport'))
         check('minimal_no_builtin_vpn', not any('LocalVPN.appex/' in name for name in names))
