@@ -35,20 +35,6 @@ def macho(data):
     assert cursor == 32 + header[5]
     return header, commands
 
-def unsigned_macho(data):
-    # Re-signing the host must not change its executable code or load commands.
-    _, commands = macho(data)
-    cursor = 32
-    result = bytearray(data)
-    for cmd, raw in commands:
-        if cmd == 0x1d:  # LC_CODE_SIGNATURE
-            offset, size = struct.unpack_from('<II', raw, 8)
-            assert offset + size == len(data)
-            struct.pack_into('<I', result, cursor + 12, 0)
-            return bytes(result[:offset])
-        cursor += len(raw)
-    raise AssertionError('Host signature command missing')
-
 with zipfile.ZipFile(ipa) as package, zipfile.ZipFile(WORK / 'lc-nightly.ipa') as old, zipfile.ZipFile(WORK / args.source_ipa) as new:
     check('zip_crc', package.testzip() is None)
     names = package.namelist()
@@ -68,19 +54,15 @@ with zipfile.ZipFile(ipa) as package, zipfile.ZipFile(WORK / 'lc-nightly.ipa') a
           and widget_info['CFBundleExecutable'] == 'LiveWidgetExtension')
     unchanged_host_files = 0
     allowed = [guest, widget, top + 'Metadata.appintents/',
-               top + '_CodeSignature/', top + 'LiveContainer',
                top + 'Intents.intentdefinition', top + 'ViewApp.intentdefinition']
     for n in old.namelist():
         if n.endswith('/') or any(n.startswith(p) for p in allowed):
             continue
         check('host_byte_identity:' + n, package.read(n) == old.read(n))
         unchanged_host_files += 1
-    check('host_code_unchanged_except_signature', unsigned_macho(package.read(top + 'LiveContainer'))
-          == unsigned_macho(old.read(top + 'LiveContainer')))
+    check('host_main_binary_unchanged', package.read(top + 'LiveContainer') == old.read(top + 'LiveContainer'))
     check('integration_framework_unchanged', package.read(top + 'Frameworks/SideStoreSupport.framework/SideStoreSupport')
           == old.read(top + 'Frameworks/SideStoreSupport.framework/SideStoreSupport'))
-    check('localvpn_background_bridge_compiled', b'LCSideStoreStartExistingLocalVPN' in
-          package.read(top + 'Frameworks/SideStoreSupport.framework/SideStoreSupport'))
     for name in ['Intents.intentdefinition', 'ViewApp.intentdefinition']:
         check('intent_definition_matches_guest:' + name,
               package.read(top + name) == new.read('Payload/SideStore.app/' + name))
@@ -146,32 +128,14 @@ with zipfile.ZipFile(ipa) as package, zipfile.ZipFile(WORK / 'lc-nightly.ipa') a
     check('guest_refresh_type_names_present', b'RefreshAllAppsIntent\0' in binary
           and b'RefreshAllAppsWidgetIntent\0' in binary)
     check('no_nested_appex_in_guest', not any(n.startswith(guest + 'PlugIns/') and '.appex/' in n for n in names))
-    vpn = top + 'PlugIns/LocalVPN.appex/'
-    vpn_info = plistlib.loads(package.read(vpn + 'Info.plist'))
-    check('localvpn_installed_in_host', vpn_info['NSExtension']['NSExtensionPointIdentifier'] == 'com.apple.networkextension.packet-tunnel')
-    check('localvpn_identifier_matches_host', vpn_info['CFBundleIdentifier'] == host_info['CFBundleIdentifier'] + '.LocalVPN')
-    check('localvpn_principal_class', vpn_info['NSExtension']['NSExtensionPrincipalClass'] == 'LocalVPN.PacketTunnelProvider')
-    check('localvpn_executable', macho(package.read(vpn + 'LocalVPN'))[0][3] == 2)
-    check('localvpn_attribution', b'SideStore Team' in package.read(top + 'LocalVPN-LICENSE.txt'))
-    check('localvpn_preferences_compiled', b'BuiltInLocalVPNAutoRefresh' in binary and b'BuiltInLocalVPNAutoLaunch' in binary)
     for rel in ['LiveContainer', 'Frameworks/SideStoreApp.framework/SideStore',
-                'PlugIns/LiveWidgetExtension.appex/LiveWidgetExtension', 'PlugIns/LocalVPN.appex/LocalVPN']:
+                'PlugIns/LiveWidgetExtension.appex/LiveWidgetExtension']:
         check('executable_mode:' + rel, bool((package.getinfo(top + rel).external_attr >> 16) & stat.S_IXUSR))
 
-for rel in ['Frameworks/SideStoreApp.framework/SideStore', 'PlugIns/LiveWidgetExtension.appex', 'PlugIns/LocalVPN.appex', '.']:
+for rel in ['Frameworks/SideStoreApp.framework/SideStore', 'PlugIns/LiveWidgetExtension.appex']:
     result = subprocess.run(['codesign', '--verify', '--strict', '--verbose=2',
                              str(WORK / args.stage / 'Payload/LiveContainer.app' / rel)], capture_output=True, text=True)
     check('adhoc_signature:' + rel, result.returncode == 0)
-
-for rel in ['.', 'PlugIns/LocalVPN.appex']:
-    result = subprocess.run(['codesign', '-d', '--entitlements', ':-',
-                             str(WORK / args.stage / 'Payload/LiveContainer.app' / rel)], capture_output=True)
-    check('localvpn_entitlements:' + rel, result.returncode == 0 and
-          'packet-tunnel-provider' in plistlib.loads(result.stdout).get('com.apple.developer.networking.networkextension', []))
-    if rel == '.':
-        entitlements = plistlib.loads(result.stdout)
-        check('host_retains_app_groups', 'group.com.SideStore.SideStore' in entitlements.get('com.apple.security.application-groups', []))
-        check('host_retains_shared_keychain', any(value.endswith('com.kdt.livecontainer.shared') for value in entitlements.get('keychain-access-groups', [])))
 
 report = {
     'artifact': ipa.name,
@@ -187,8 +151,7 @@ report = {
     'device_installation': 'UNRUN',
     'apple_id_login_and_2fa': 'UNRUN',
     'refresh_and_guest_launch': 'UNRUN',
-    'localvpn_device_connection_and_routing': 'UNRUN',
-    'distribution_signing': 'Requires installation signing that preserves the LocalVPN extension and provisions Network Extension capabilities for host and extension. Ad-hoc signatures are not device installation authorization.'
+    'distribution_signing': 'Requires iloader to re-sign with user account. Ad-hoc signatures are not device installation authorization.'
 }
 (OUT / args.report).write_text(json.dumps(report, indent=2) + '\n')
 print(json.dumps({k: v for k, v in report.items() if k != 'checks'}, indent=2))

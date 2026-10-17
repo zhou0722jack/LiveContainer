@@ -17,19 +17,6 @@ spec.loader.exec_module(pipeline)
 
 
 class PipelineTests(unittest.TestCase):
-    def test_unsigned_host_retains_upstream_capabilities(self):
-        template = {'application-identifier': '$(DEVELOPMENT_TEAM).$(PRODUCT_BUNDLE_IDENTIFIER)',
-                    'com.apple.security.application-groups': ['$(APP_GROUP_SIDESTORE)'],
-                    'keychain-access-groups': ['$(AppIdentifierPrefix)com.kdt.livecontainer.shared'],
-                    'get-task-allow': True}
-        expanded = pipeline.expand_entitlements(template, {'DEVELOPMENT_TEAM': 'TEST123456',
-            'PRODUCT_BUNDLE_IDENTIFIER': 'com.kdt.livecontainer', 'APP_GROUP_SIDESTORE': 'group.com.SideStore.SideStore'})
-        self.assertEqual(expanded['keychain-access-groups'], ['TEST123456.com.kdt.livecontainer.shared'])
-        self.assertEqual(expanded['com.apple.security.application-groups'], ['group.com.SideStore.SideStore'])
-        self.assertTrue(expanded['get-task-allow'])
-        with self.assertRaisesRegex(RuntimeError, 'Unresolved entitlement setting'):
-            pipeline.expand_entitlements({'unknown': '$(MISSING)'}, {'DEVELOPMENT_TEAM': 'TEST123456'})
-
     def test_schedule_skips_only_successful_unchanged_inputs(self):
         with tempfile.TemporaryDirectory() as directory:
             base = Path(directory)

@@ -18,8 +18,7 @@ Fork [LiveContainer/LiveContainer](https://github.com/LiveContainer/LiveContaine
    默认跟踪上游最新源码；`pinned` 勾选后使用 2026-10-17 核对的历史提交。
 5. 成功后，在该次运行底部下载 **LiveContainer-SideStore-zh-Hans** 附件，
    解压得到 `LiveContainer+SideStore-zh-Hans.ipa`、校验报告和构建记录。
-   它仍需使用支持 Network Extension 权限的签名方式安装，保留应用扩展，
-   并为宿主及 LocalVPN 扩展提供相应权限；普通不保留 VPN 权限的重签名无法运行内置 VPN。
+   它仍需使用 iloader 等工具以自己的账号签名安装，并保留应用扩展。
 
 如果通过 Git 命令上传，在你已经克隆的 Fork 根目录合并交付文件后，
 只需将 `.github/workflows/build-zh.yml` 和 `sidestore-zh/` 加入提交。
@@ -51,12 +50,8 @@ GitHub Fork 的定时工作流需要先启用，并且仅在默认分支运行�
 修改内置汉化补丁、中文资源表或历史 `Package.resolved` 后，需要同步更新
 `inputs.lock.json` 中 `files` 的 SHA-256；自定义功能补丁不需要修改这组摘要。
 
-已加入 [内置 LocalVPN](custom/LocalVPN/README.md)，在 SideStore 的实验性功能中提供
-“刷新 App 时自动开启”和“打开 SideStore 时自动开启”两个独立开关，默认关闭。
-首次连接需允许添加 VPN 配置，VPN 状态与配置页面可手动连接、断开及调整地址。
-
-自定义功能入口是 [custom/series.json](custom/series.json)，SideStore 列表已包含内置 VPN 补丁。
-以后可继续分别向 `LiveContainer`、`SideStore` 的列表添加补丁。详见
+自定义功能入口是 [custom/series.json](custom/series.json)，两个列表目前为空。
+以后分别向 `LiveContainer`、`SideStore` 的列表添加补丁。详见
 [自定义补丁说明](custom/README.md)。流程顺序为：获取上游 → 应用汉化 →
 应用自己的功能 → 分别编译 → 整合与静态校验。不会在构建失败时替换现有成果。
 
@@ -72,8 +67,7 @@ GitHub runner 实际提供的版本。不要为这个变量填写账号或密钥
 
 `verification-zh.json` 验证包结构、文件完整性、动态库转换、刷新 Intent 映射、
 扩展身份、执行权限和改动组件临时签名。宿主逐字节比较的基线是本次本地编译
-且添加集成 plist 字段、LocalVPN 扩展后的宿主；外层应用重新签封，宿主可执行代码
-按排除代码签名的方式核对。此基线不表示它与官方发布二进制一致。
+且添加集成 plist 字段后的宿主，不表示它与官方发布二进制一致。
 
 所有构建产物均不代表真机安装、Apple ID 登录、双重验证、配对/VPN、刷新、
 快捷指令、小组件或容器内应用运行已通过。包内临时签名不授予手机安装权限。
@@ -101,8 +95,6 @@ python3 sidestore-zh/build.py package
 [LiveContainer](https://github.com/LiveContainer/LiveContainer)、
 [SideStore](https://github.com/SideStore/SideStore) 和
 [dylibify](https://github.com/LiveContainer/dylibify)。许可证保存在 `licenses/`。
-隧道实现使用 [SiamSadik/LocalDevVPN](https://github.com/SiamSadik/LocalDevVPN) 的代码，
-原始作者 SideStore Team / Stossy11，详见 `custom/LocalVPN/` 的出处和许可证。
 附件 `source-recipe.zip` 包含构建脚本、补丁、许可证、实际源码提交以及实际使用的
 依赖锁；`source-manifest.json` 记录构建前源码文件摘要。公开分发修改版本时应
 保留来源、许可证及对应源码获取方式。以后新增的补丁亦需保留适用的许可证。
