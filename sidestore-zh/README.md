@@ -5,6 +5,9 @@ Fork [LiveContainer/LiveContainer](https://github.com/LiveContainer/LiveContaine
 加入你的 Fork。主仓库负责运行构建；两个应用源码在每次构建中分别获取。
 以后维护自定义功能只需改补丁，不必反复手动合并两个完整项目。
 
+另有独立的[极简版](minimal/README.md)：只保留侧载、刷新、容器安装和账号登录入口。
+普通版工作流和附件继续保留；极简版使用独立工作流，沿用相同 App ID，两版不能同时安装。
+
 ## 启用
 
 1. GitHub 上 Fork LiveContainer/LiveContainer，保留默认分支 `main` 即可。

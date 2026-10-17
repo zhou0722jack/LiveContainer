@@ -54,7 +54,8 @@ subprocess.run(['codesign', '--force', '--sign', '-', '--timestamp=none',
 subprocess.run(['codesign', '--force', '--sign', '-', '--timestamp=none',
                 '--entitlements', str(WORK / 'LiveContainer/.github/sidelc/LiveWidgetExtension_adhoc.xml'),
                 str(widget)], check=True)
-ipa = OUT / 'LiveContainer+SideStore-zh-Hans.ipa'
+variant = json.loads((ROOT / 'candidate.json').read_text()).get('variant', 'standard')
+ipa = OUT / ('LiveContainer+SideStore-Minimal.ipa' if variant == 'minimal' else 'LiveContainer+SideStore-zh-Hans.ipa')
 assert not ipa.exists()
 subprocess.run(['zip', '-qry', str(ipa), 'Payload', '-x', '*/.DS_Store', '*/._*', '*/__MACOSX/*'], cwd=STAGE, check=True)
 print(ipa)

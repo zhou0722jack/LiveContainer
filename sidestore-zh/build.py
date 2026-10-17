@@ -13,6 +13,7 @@ from pathlib import Path
 BASE = Path(__file__).resolve().parent
 LOCK = json.loads((BASE / 'inputs.lock.json').read_text())
 ARTIFACT = 'LiveContainer+SideStore-zh-Hans.ipa'
+VARIANT = 'standard'
 PACKAGE_LOCK = 'AltStore.xcodeproj/project.xcworkspace/xcshareddata/swiftpm/Package.resolved'
 
 
@@ -60,6 +61,9 @@ def recipe_files():
         if path.is_file() and not any(p in {'.build', '.last-success', '.git', '.DS_Store', '__pycache__'} for p in rel.parts):
             yield path, 'sidestore-zh/' + rel.as_posix()
     yield BASE.parent / '.github/workflows/build-zh.yml', '.github/workflows/build-zh.yml'
+    minimal_workflow = BASE.parent / '.github/workflows/build-minimal.yml'
+    if minimal_workflow.exists():
+        yield minimal_workflow, '.github/workflows/build-minimal.yml'
 
 
 def check(root, args):
@@ -73,12 +77,17 @@ def check(root, args):
             require(len(response) == 2 and len(response[0]) == 40, f'Cannot resolve {name}')
             entry['commit'] = response[0]
     files = {name: digest(path) for path, name in recipe_files()}
-    fingerprint = hashlib.sha256(json.dumps({'sources': sources, 'recipe': files}, sort_keys=True).encode()).hexdigest()
-    previous = BASE / '.last-success/state.json'
+    variant = getattr(args, 'variant', 'standard')
+    identity = {'sources': sources, 'recipe': files}
+    if variant != 'standard':
+        identity['variant'] = variant
+    fingerprint = hashlib.sha256(json.dumps(identity, sort_keys=True).encode()).hexdigest()
+    previous = BASE / '.last-success' / ('minimal/state.json' if variant == 'minimal' else 'state.json')
     changed = not previous.exists() or read_json(previous).get('fingerprint') != fingerprint
     should_build = args.force or os.environ.get('GITHUB_EVENT_NAME') != 'schedule' or changed
     candidate = {'sources': sources, 'recipe': files, 'fingerprint': fingerprint,
-                 'mode': 'pinned' if args.pinned else 'upstream', 'should_build': should_build}
+                 'mode': 'pinned' if args.pinned else 'upstream', 'should_build': should_build,
+                 'variant': variant}
     write_json(root / 'candidate.json', candidate)
     if os.environ.get('GITHUB_OUTPUT'):
         with open(os.environ['GITHUB_OUTPUT'], 'a') as stream:
@@ -142,6 +151,8 @@ def prepare(root, args):
         bases = set(LOCK['sources'][name].get('patch_bases', []))
         if name == 'SideStore':
             bases.add(LOCK['sources'][name]['commit'])
+        if candidate.get('variant') == 'minimal' and name == 'LiveContainer':
+            bases.add(LOCK['sources'][name]['commit'])
         for commit in sorted(bases - {entry['commit']}):
             run(['git', 'fetch', '--depth=1', 'origin', commit], cwd=work / name)
         if args.source_mirror:
@@ -166,11 +177,19 @@ def prepare(root, args):
     require((source / PACKAGE_LOCK).exists(), 'Upstream dependency lock missing; review before building')
     run([sys.executable, str(work / 'audit_zh.py')])
     series = read_json(BASE / 'custom/series.json')
+    if candidate.get('variant') == 'minimal':
+        minimal_series = read_json(BASE / 'minimal/series.json')
+        require(set(minimal_series) == {'LiveContainer', 'SideStore'}, 'Unexpected minimal patch project')
+        for name, paths in minimal_series.items():
+            series[name] = series[name] + ['../minimal/' + path for path in paths]
     require(set(series) == {'LiveContainer', 'SideStore'}, 'Unexpected custom patch project')
     for name, paths in series.items():
         for index, rel in enumerate(paths):
             patch = (BASE / 'custom' / rel).resolve()
-            require(patch.is_relative_to((BASE / 'custom').resolve()) and patch.suffix == '.patch', 'Invalid custom patch path')
+            allowed = [BASE / 'custom']
+            if candidate.get('variant') == 'minimal':
+                allowed.append(BASE / 'minimal')
+            require(any(patch.is_relative_to(path.resolve()) for path in allowed) and patch.suffix == '.patch', 'Invalid custom patch path')
             apply_patch(work / name, patch, work / f'patch-{name}-{index}.log')
     manifest = {name: {'files': snapshot(work / name),
                        'submodules': git(work / name, 'submodule', 'status', '--recursive')}
@@ -221,6 +240,13 @@ def make_host_baseline(work):
     shutil.copytree(source, host, symlinks=True)
     path = host / 'Info.plist'
     info = plistlib.loads(path.read_bytes())
+    if read_json(work.parent / 'candidate.json').get('variant') == 'minimal':
+        info['CFBundleDisplayName'] = '极简'
+        info['LCMinimalVariant'] = True
+        for localized in host.glob('*.lproj/InfoPlist.strings'):
+            values = plistlib.loads(localized.read_bytes())
+            values['CFBundleDisplayName'] = '极简'
+            localized.write_bytes(plistlib.dumps(values, fmt=plistlib.FMT_BINARY))
     groups = info.setdefault('ALTAppGroups', [])
     if 'group.com.SideStore.SideStore' not in groups:
         groups.append('group.com.SideStore.SideStore')
@@ -270,6 +296,7 @@ def package(root):
     for name in ['build-provenance.json', 'zh-source-audit.json', 'source-manifest.json']:
         shutil.copy2(work / name, out / name)
     report = read_json(out / 'verification-zh.json')
+    report['variant'] = read_json(root / 'candidate.json').get('variant', 'standard')
     report['translation_entries'] = len(table)
     report['ui_visual_validation'] = 'UNRUN'
     provenance = read_json(work / 'build-provenance.json')
@@ -287,8 +314,11 @@ def package(root):
 
 def mark_success(root):
     require((root / 'outputs/verification-zh.json').exists(), 'No verified output')
+    candidate = read_json(root / 'candidate.json')
     state = BASE / '.last-success'
-    state.mkdir(exist_ok=True)
+    if candidate.get('variant') == 'minimal':
+        state = state / 'minimal'
+    state.mkdir(parents=True, exist_ok=True)
     write_json(state / 'state.json', {'fingerprint': read_json(root / 'candidate.json')['fingerprint']})
 
 
@@ -296,13 +326,22 @@ if __name__ == '__main__':
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('step', choices=['check', 'prepare', 'build', 'package', 'mark-success'])
     parser.add_argument('--build-root', type=Path, default=BASE / '.build')
+    parser.add_argument('--variant', choices=['standard', 'minimal'], default='standard')
     parser.add_argument('--pinned', action='store_true', help='Use historical pinned source commits')
     parser.add_argument('--force', action='store_true', help='Build unchanged scheduled inputs')
     parser.add_argument('--source-mirror', type=Path, help='Use existing local Git repositories')
     args = parser.parse_args()
+    VARIANT = args.variant
+    if VARIANT == 'minimal':
+        ARTIFACT = 'LiveContainer+SideStore-Minimal.ipa'
+        if args.build_root == BASE / '.build':
+            args.build_root = BASE / '.build/minimal'
     for name, expected in LOCK['files'].items():
         require(digest(BASE / name) == expected, 'Recipe hash mismatch: ' + name)
     root = args.build_root.resolve()
+    if args.step != 'check' and (root / 'candidate.json').exists():
+        require(read_json(root / 'candidate.json').get('variant', 'standard') == args.variant,
+                'Build variant changed; use the same --variant for every step')
     if args.step == 'check':
         check(root, args)
     elif args.step == 'prepare':

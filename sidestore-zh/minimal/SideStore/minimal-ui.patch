@@ -1,0 +1,342 @@
+diff --git a/AltStore/TabBarController.swift b/AltStore/TabBarController.swift
+index 83d6fb4ee8f03831db1ea65be6cbce147f19447f..3b3eb2aa68a75cc2166534c05433edc151a16717 100644
+--- a/AltStore/TabBarController.swift
++++ b/AltStore/TabBarController.swift
+@@ -7,6 +7,10 @@
+ //
+ 
+ @preconcurrency import UIKit
++import SwiftUI
++import CoreData
++import Darwin
++import UniformTypeIdentifiers
+ 
+ extension TabBarController
+ {
+@@ -47,6 +51,9 @@ final class TabBarController: UITabBarController
+         
+         let sourcesNavigationController = self.viewControllers![Tab.sources.rawValue] as! UINavigationController
+         self.sourcesViewController = sourcesNavigationController.viewControllers.first as? SourcesViewController
++        let minimal = MinimalSideStoreViewController(style: .insetGrouped)
++        self.viewControllers = [UINavigationController(rootViewController: minimal)]
++        self.tabBar.isHidden = true
+     }
+     
+     override func viewDidAppear(_ animated: Bool)
+@@ -76,35 +83,281 @@ final class TabBarController: UITabBarController
+ 
+ extension TabBarController
+ {
+-    @objc func presentSources(_ sender: Any)
+-    {
+-        if let presentedViewController = self.presentedViewController
+-        {
+-            presentedViewController.dismiss(animated: true) {
+-                self.presentSources(sender)
+-            }
+-            
+-            return
+-        }
+-                
+-        if let notification = (sender as? Notification), let sourceURL = notification.userInfo?[AppDelegate.addSourceDeepLinkURLKey] as? URL
+-        {
+-            self.sourcesViewController?.deepLinkSourceURL = sourceURL
+-        }
+-        
+-        self.selectedIndex = Tab.sources.rawValue
++    @objc func presentSources(_ sender: Any) {
++        // Source browsing is absent from the minimal variant.
+     }
++
+ }
+ 
+ private extension TabBarController
+ {
+     @objc func importApp(_ notification: Notification)
+     {
+-        self.selectedIndex = Tab.myApps.rawValue
++        self.selectedIndex = 0
++        if let url = notification.userInfo?[AppDelegate.importAppDeepLinkURLKey] as? URL {
++            MinimalSideStoreViewController.requestImport(url)
++        }
+     }
+ 
+     @objc func openErrorLog(_ notification: Notification)
+     {
+-        self.selectedIndex = Tab.settings.rawValue
++        MinimalSideStoreViewController.requestRoute("account")
++    }
++}
++
++// The minimal variant uses the upstream authentication and operation pipelines.
++@MainActor
++final class MinimalSideStoreViewController: UITableViewController, UIDocumentPickerDelegate {
++    private static var pendingRoute: String?
++    private static var pendingImport: URL?
++    private static let routeNotification = Notification.Name("MinimalSideStoreRoute")
++    private var route = "install"
++    private var apps: [InstalledApp] = []
++    private var operation: RefreshGroup?
++    private var busy = false
++    private let progressView = UIProgressView(progressViewStyle: .default)
++
++    static func requestRoute(_ route: String) {
++        guard ["install", "refresh", "account"].contains(route) else { return }
++        pendingRoute = route
++        NotificationCenter.default.post(name: routeNotification, object: nil)
++    }
++
++    static func requestImport(_ url: URL) {
++        pendingImport = url
++        requestRoute("install")
++    }
++
++    override func viewDidLoad() {
++        super.viewDidLoad()
++        navigationItem.leftBarButtonItem = UIBarButtonItem(title: "首页", style: .plain, target: self, action: #selector(returnHome))
++        navigationItem.rightBarButtonItem = UIBarButtonItem(title: "账号", style: .plain, target: self, action: #selector(openAccount))
++        navigationController?.navigationBar.prefersLargeTitles = true
++        let header = UIView(frame: CGRect(x: 0, y: 0, width: 320, height: 30))
++        progressView.frame = CGRect(x: 20, y: 12, width: 280, height: 4)
++        progressView.autoresizingMask = [.flexibleWidth]
++        progressView.isHidden = true
++        header.addSubview(progressView)
++        tableView.tableHeaderView = header
++        let hint = UILabel(frame: CGRect(x: 0, y: 0, width: 320, height: 70))
++        hint.text = "侧载和刷新前，请先连接外置 LocalDevVPN。\n首次使用请在账号页完成配对配置。"
++        hint.numberOfLines = 0
++        hint.textAlignment = .center
++        hint.font = .preferredFont(forTextStyle: .footnote)
++        hint.textColor = .secondaryLabel
++        tableView.tableFooterView = hint
++        NotificationCenter.default.addObserver(self, selector: #selector(consumeRoute), name: Self.routeNotification, object: nil)
++        NotificationCenter.default.addObserver(self, selector: #selector(reloadApps), name: .NSManagedObjectContextObjectsDidChange, object: DatabaseManager.shared.viewContext)
++    }
++
++    override func viewDidAppear(_ animated: Bool) {
++        super.viewDidAppear(animated)
++        consumeRoute()
++        reloadApps()
++        processPendingImport()
++    }
++
++    @objc private func consumeRoute() {
++        guard !busy, viewIfLoaded?.window != nil, presentedViewController == nil else { return }
++        if let next = Self.pendingRoute { route = next; Self.pendingRoute = nil }
++        title = route == "account" ? "登录账号" : (route == "refresh" ? "刷新 App" : "侧载 App")
++        reloadApps()
++        processPendingImport()
++    }
++
++    @objc private func openAccount() { Self.requestRoute("account") }
++
++    @objc private func returnHome() {
++        guard !busy else { return }
++        let path = Bundle.Info.activeBundle.bundleURL.appendingPathComponent("Frameworks/SideStoreSupport.framework/SideStoreSupport").path
++        guard let handle = dlopen(path, RTLD_LAZY | RTLD_NOLOAD) else {
++            showMessage("无法返回首页", "请关闭并重新打开极简版。")
++            return
++        }
++        defer { dlclose(handle) }
++        guard let symbol = dlsym(handle, "LCSideStoreReturnToMinimalHome") else {
++            showMessage("无法返回首页", "缺少宿主返回接口，请重新安装极简版。")
++            return
++        }
++        unsafeBitCast(symbol, to: (@convention(c) () -> Void).self)()
++    }
++
++    @objc private func reloadApps() {
++        guard DatabaseManager.shared.isStarted else { return }
++        apps = InstalledApp.fetchActiveApps(in: DatabaseManager.shared.viewContext)
++            .sorted { $0.name.localizedStandardCompare($1.name) == .orderedAscending }
++        tableView.reloadData()
++    }
++
++    override func numberOfSections(in tableView: UITableView) -> Int { 2 }
++
++    override func tableView(_ tableView: UITableView, numberOfRowsInSection section: Int) -> Int {
++        if route == "account" { return section == 0 ? 2 : 3 }
++        return section == 0 ? 1 : max(1, apps.count)
++    }
++
++    override func tableView(_ tableView: UITableView, titleForHeaderInSection section: Int) -> String? {
++        if route == "account" { return section == 0 ? "Apple 账号" : "首次配置" }
++        return section == 0 ? nil : "已侧载 App · 点击续签"
++    }
++
++    override func tableView(_ tableView: UITableView, cellForRowAt indexPath: IndexPath) -> UITableViewCell {
++        let cell = UITableViewCell(style: .subtitle, reuseIdentifier: nil)
++        cell.detailTextLabel?.numberOfLines = 0
++        if route == "account" {
++            if indexPath.section == 0 {
++                cell.textLabel?.text = indexPath.row == 0 ? (AuthManager.shared.currentAppleID ?? "未登录") : (AuthManager.shared.isAuthenticated ? "退出账号" : "登录 Apple 账号")
++                cell.selectionStyle = indexPath.row == 0 ? .none : .default
++            } else {
++                cell.textLabel?.text = ["配对文件", "连接配置", "Anisette 配置"][indexPath.row]
++                cell.accessoryType = .disclosureIndicator
++            }
++        } else if indexPath.section == 0 {
++            cell.textLabel?.text = busy ? "正在处理，请稍候…" : (route == "refresh" ? "刷新全部 App" : "选择 IPA 侧载")
++            cell.imageView?.image = UIImage(systemName: route == "refresh" ? "arrow.clockwise" : "plus")
++        } else if apps.isEmpty {
++            cell.textLabel?.text = "暂无可刷新的 App"
++            cell.selectionStyle = .none
++        } else {
++            let app = apps[indexPath.row]
++            cell.textLabel?.text = app.name
++            cell.detailTextLabel?.text = "到期：" + DateFormatter.localizedString(from: app.expirationDate, dateStyle: .medium, timeStyle: .short)
++            cell.accessoryType = .disclosureIndicator
++        }
++        cell.isUserInteractionEnabled = !busy
++        return cell
++    }
++
++    override func tableView(_ tableView: UITableView, didSelectRowAt indexPath: IndexPath) {
++        tableView.deselectRow(at: indexPath, animated: true)
++        guard !busy else { return }
++        if route == "account" {
++            if indexPath.section == 1 {
++                switch indexPath.row {
++                case 0: navigationController?.pushViewController(UIHostingController(rootView: PairingFileManagementView()), animated: true)
++                case 1: navigationController?.pushViewController(UIHostingController(rootView: ConnectionConfigView()), animated: true)
++                default: navigationController?.pushViewController(UIHostingController(rootView: AnisetteServersView()), animated: true)
++                }
++            } else if indexPath.row == 1 { changeAccount() }
++        } else if indexPath.section == 0 {
++            if route == "refresh" {
++                let targets = InstalledApp.fetchAppsForRefreshingAll(in: DatabaseManager.shared.viewContext)
++                confirmRefresh(targets)
++            } else { chooseIPA() }
++        } else if !apps.isEmpty { confirmRefresh([apps[indexPath.row]]) }
++    }
++
++    private func setBusy(_ value: Bool, progress: Progress? = nil) {
++        busy = value
++        progressView.observedProgress = progress
++        progressView.isHidden = !value
++        navigationItem.leftBarButtonItem?.isEnabled = !value
++        navigationItem.rightBarButtonItem?.isEnabled = !value
++        tableView.reloadData()
++    }
++
++    private func chooseIPA() {
++        guard AuthManager.shared.isAuthenticated else { Self.requestRoute("account"); return }
++        let picker = UIDocumentPickerViewController(forOpeningContentTypes: [.init(filenameExtension: "ipa") ?? .data], asCopy: true)
++        picker.allowsMultipleSelection = false
++        picker.delegate = self
++        present(picker, animated: true)
++    }
++
++    func documentPicker(_ controller: UIDocumentPickerViewController, didPickDocumentsAt urls: [URL]) {
++        guard let url = urls.first else { return }
++        controller.dismiss(animated: true) { [weak self] in self?.confirmInstall(url) }
++    }
++
++    private func processPendingImport() {
++        guard !busy, presentedViewController == nil, viewIfLoaded?.window != nil,
++              let url = Self.pendingImport else { return }
++        Self.pendingImport = nil
++        confirmInstall(url)
++    }
++
++    private func confirmInstall(_ url: URL) {
++        guard !busy else { return }
++        InstallAppDialog.present(ipaURL: url, from: self, onConfirm: { [weak self] in
++            guard let self else { return }
++            self.setBusy(true)
++            let group = AppManager.shared.install(.url(url), presentingViewController: self) { [weak self] result in
++                Task { @MainActor in
++                    guard let self else { return }
++                    self.operation = nil
++                    self.setBusy(false)
++                    switch result {
++                    case .success: self.showMessage("侧载完成", "App 已安装。")
++                    case .failure(let error): if !(error is CancellationError) { self.showMessage("侧载失败", error.localizedDescription) }
++                    }
++                    self.reloadApps()
++                }
++            }
++            self.operation = group
++            self.setBusy(true, progress: group.progress)
++        })
++    }
++
++    private func confirmRefresh(_ targets: [InstalledApp]) {
++        guard !targets.isEmpty else { showMessage("无法刷新", "暂无可刷新的 App。"); return }
++        let alert = UIAlertController(title: "刷新 App", message: "为 \(targets.count) 个 App 续签？刷新自身时 App 可能退出。", preferredStyle: .alert)
++        alert.addAction(UIAlertAction(title: "取消", style: .cancel))
++        alert.addAction(UIAlertAction(title: "刷新", style: .default) { [weak self] _ in self?.refresh(targets) })
++        present(alert, animated: true)
++    }
++
++    private func refresh(_ targets: [InstalledApp]) {
++        guard !busy else { return }
++        setBusy(true)
++        let group = AppManager.shared.refresh(targets, presentingViewController: self)
++        group.completionHandler = { [weak self] results in
++            Task { @MainActor in
++                guard let self else { return }
++                self.operation = nil
++                self.setBusy(false)
++                let errors = results.values.compactMap { result -> Error? in
++                    if case .failure(let error) = result { return error }; return nil
++                }
++                if let error = errors.first { self.showMessage("刷新未完成", error.localizedDescription) }
++                else { self.showMessage("刷新完成", "App 已续签。") }
++                self.reloadApps()
++            }
++        }
++        operation = group
++        setBusy(true, progress: group.progress)
++    }
++
++    private func changeAccount() {
++        if AuthManager.shared.isAuthenticated {
++            let alert = UIAlertController(title: "退出账号？", message: "退出后需要重新登录才能侧载和刷新。", preferredStyle: .alert)
++            alert.addAction(UIAlertAction(title: "取消", style: .cancel))
++            alert.addAction(UIAlertAction(title: "退出", style: .destructive) { [weak self] _ in
++                guard let self else { return }
++                self.setBusy(true)
++                Task { @MainActor in
++                    await AuthManager.shared.signOut()
++                    self.setBusy(false)
++                    self.reloadApps()
++                }
++            })
++            present(alert, animated: true)
++        } else {
++            setBusy(true)
++            Task { @MainActor in
++                do { try await AuthManager.shared.signIn(presentingViewController: self) }
++                catch is CancellationError { }
++                catch { showMessage("登录失败", error.localizedDescription) }
++                setBusy(false)
++                reloadApps()
++            }
++        }
++    }
++
++    private func showMessage(_ title: String, _ message: String) {
++        let alert = UIAlertController(title: title, message: message, preferredStyle: .alert)
++        alert.addAction(UIAlertAction(title: "好", style: .default) { [weak self] _ in
++            DispatchQueue.main.async { self?.consumeRoute() }
++        })
++        present(alert, animated: true)
+     }
+ }
+diff --git a/SideStore/DeepLinks/URLHandler.swift b/SideStore/DeepLinks/URLHandler.swift
+index a21e2450a3a797b705905dcc53cfc594aaff0a80..aeb230f258ebe31a93d967656ea0a3cbed4060ce 100644
+--- a/SideStore/DeepLinks/URLHandler.swift
++++ b/SideStore/DeepLinks/URLHandler.swift
+@@ -30,6 +30,11 @@ class URLHandler {
+         debugLog("[URLHandler] Matched host: \(host), path: \(url.path.lowercased())")
+         
+         switch host {
++        case "minimal":
++            let route = url.path.trimmingCharacters(in: CharacterSet(charactersIn: "/")).lowercased()
++            guard ["install", "refresh", "account"].contains(route) else { return false }
++            MinimalSideStoreViewController.requestRoute(route)
++            return true
+         case "appbackupresponse":
+             let result: Result<Void, Error>
+             switch url.path.lowercased() {

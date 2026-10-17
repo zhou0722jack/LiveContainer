@@ -63,6 +63,15 @@ with zipfile.ZipFile(ipa) as package, zipfile.ZipFile(WORK / 'lc-nightly.ipa') a
     check('host_main_binary_unchanged', package.read(top + 'LiveContainer') == old.read(top + 'LiveContainer'))
     check('integration_framework_unchanged', package.read(top + 'Frameworks/SideStoreSupport.framework/SideStoreSupport')
           == old.read(top + 'Frameworks/SideStoreSupport.framework/SideStoreSupport'))
+    variant = json.loads((ROOT / 'candidate.json').read_text()).get('variant', 'standard')
+    if variant == 'minimal':
+        check('minimal_display_name', host_info.get('CFBundleDisplayName') == '极简' and host_info.get('LCMinimalVariant') is True)
+        check('minimal_host_identifier_unchanged', host_info['CFBundleIdentifier'] == 'com.kdt.livecontainer')
+        check('minimal_four_actions_compiled', all(value in package.read(top + 'LiveContainer')
+              for value in [text.encode() for text in ['侧载 App', '刷新 App', '容器安装 App', '登录账号']]))
+        check('minimal_sideload_controller_compiled', b'MinimalSideStoreViewController' in package.read(guest + 'SideStore'))
+        check('minimal_return_bridge_compiled', b'LCSideStoreReturnToMinimalHome' in package.read(top + 'Frameworks/SideStoreSupport.framework/SideStoreSupport'))
+        check('minimal_no_builtin_vpn', not any('LocalVPN.appex/' in name for name in names))
     for name in ['Intents.intentdefinition', 'ViewApp.intentdefinition']:
         check('intent_definition_matches_guest:' + name,
               package.read(top + name) == new.read('Payload/SideStore.app/' + name))
