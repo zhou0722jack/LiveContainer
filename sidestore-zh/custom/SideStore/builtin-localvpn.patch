@@ -225,7 +225,7 @@ index a76344edcf8ed2518f52cff5b19de68fe1d0a991..fdc4c079b22cf4384a80a89efc53951b
              for operation in operations {
                  let elapsed = CFAbsoluteTimeGetCurrent() - group.operationStartTime
 diff --git a/SideStore/Views/Settings/Diagnostics/ExperimentalFeaturesView.swift b/SideStore/Views/Settings/Diagnostics/ExperimentalFeaturesView.swift
-index 362f06c74483a1fcea40e9665086898c953c8d44..80d0b61d6d179fc113f91aa3ace380187bc9611c 100644
+index 362f06c74483a1fcea40e9665086898c953c8d44..0fe1c527136f4194b7858de2dc21bc143947483b 100644
 --- a/SideStore/Views/Settings/Diagnostics/ExperimentalFeaturesView.swift
 +++ b/SideStore/Views/Settings/Diagnostics/ExperimentalFeaturesView.swift
 @@ -14,11 +14,44 @@ private extension Color {
@@ -304,9 +304,9 @@ index 362f06c74483a1fcea40e9665086898c953c8d44..80d0b61d6d179fc113f91aa3ace38018
 +        SwiftUI.Form {
 +            SwiftUI.Section(header: Text("连接"), footer: Text("VPN 启动失败会停止自动刷新，并显示原因。后台首次使用前，请先在此连接一次并允许系统授权。其他 VPN 可能被系统断开。")) {
 +                HStack { Text("连接状态"); Spacer(); Text(vpn.status) }
-+                Button("连接内置 VPN") { Task { try? await vpn.connect() } }
++                SwiftUI.Button("连接内置 VPN") { Task { try? await vpn.connect() } }
 +                    .disabled(vpn.isBusy)
-+                Button("断开内置 VPN", role: .destructive) { vpn.disconnect() }
++                SwiftUI.Button("断开内置 VPN", role: .destructive) { vpn.disconnect() }
 +                    .disabled(vpn.isBusy)
 +                if let error = vpn.lastError { Text(error).foregroundColor(.orange) }
 +            }
