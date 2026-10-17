@@ -32,7 +32,7 @@ index b3b01cfdfef6d178c902c9ee3f91466b006b40c7..6341b3947c84838605ec8b35ff9e89e4
              // dump sidebackup logs if any
 diff --git a/SideStore/Core/DeviceApi/BuiltInLocalVPN.swift b/SideStore/Core/DeviceApi/BuiltInLocalVPN.swift
 new file mode 100644
-index 0000000000000000000000000000000000000000..c084e52c6ad79b4f0346709ad826aa71fe5283a2
+index 0000000000000000000000000000000000000000..21f106b1900b61b39f51398361df2bbcdf575e70
 --- /dev/null
 +++ b/SideStore/Core/DeviceApi/BuiltInLocalVPN.swift
 @@ -0,0 +1,169 @@
@@ -68,7 +68,7 @@ index 0000000000000000000000000000000000000000..c084e52c6ad79b4f0346709ad826aa71
 +    private var providerID: String? {
 +        // Bundle.main is SideStore's framework while running inside LiveContainer.
 +        // activeBundle is already redirected by SideStoreSupport to the real host.
-+        guard let plugins = Bundle.activeBundle.builtInPlugInsURL,
++        guard let plugins = Bundle.Info.activeBundle.builtInPlugInsURL,
 +              let bundle = Bundle(url: plugins.appendingPathComponent("LocalVPN.appex")) else { return nil }
 +        return bundle.bundleIdentifier
 +    }
@@ -87,7 +87,7 @@ index 0000000000000000000000000000000000000000..c084e52c6ad79b4f0346709ad826aa71
 +    }
 +
 +    private func startViaHostIfNeeded() async throws -> Bool {
-+        let path = Bundle.activeBundle.bundleURL.appendingPathComponent("Frameworks/SideStoreSupport.framework/SideStoreSupport").path
++        let path = Bundle.Info.activeBundle.bundleURL.appendingPathComponent("Frameworks/SideStoreSupport.framework/SideStoreSupport").path
 +        guard let handle = dlopen(path, RTLD_LAZY | RTLD_NOLOAD) else { return false }
 +        defer { dlclose(handle) }
 +        guard let symbol = dlsym(handle, "LCSideStoreStartExistingLocalVPN") else { return false }
@@ -225,7 +225,7 @@ index a76344edcf8ed2518f52cff5b19de68fe1d0a991..fdc4c079b22cf4384a80a89efc53951b
              for operation in operations {
                  let elapsed = CFAbsoluteTimeGetCurrent() - group.operationStartTime
 diff --git a/SideStore/Views/Settings/Diagnostics/ExperimentalFeaturesView.swift b/SideStore/Views/Settings/Diagnostics/ExperimentalFeaturesView.swift
-index 362f06c74483a1fcea40e9665086898c953c8d44..13810dcdc7dfade251c906d47a4cbce89631babf 100644
+index 362f06c74483a1fcea40e9665086898c953c8d44..80d0b61d6d179fc113f91aa3ace380187bc9611c 100644
 --- a/SideStore/Views/Settings/Diagnostics/ExperimentalFeaturesView.swift
 +++ b/SideStore/Views/Settings/Diagnostics/ExperimentalFeaturesView.swift
 @@ -14,11 +14,44 @@ private extension Color {
@@ -290,7 +290,7 @@ index 362f06c74483a1fcea40e9665086898c953c8d44..13810dcdc7dfade251c906d47a4cbce8
                  .labelsHidden()
                  .tint(.green)
          }
-@@ -117,3 +151,39 @@ struct ExperimentalFeaturesView: View {
+@@ -117,3 +151,35 @@ struct ExperimentalFeaturesView: View {
              .padding(.leading, 16)
      }
  }
@@ -301,25 +301,21 @@ index 362f06c74483a1fcea40e9665086898c953c8d44..13810dcdc7dfade251c906d47a4cbce8
 +    @AppStorage(BuiltInLocalVPN.peerIPKey) private var peerIP = "10.7.0.1"
 +
 +    var body: some View {
-+        Form {
-+            Section {
++        SwiftUI.Form {
++            SwiftUI.Section(header: Text("连接"), footer: Text("VPN 启动失败会停止自动刷新，并显示原因。后台首次使用前，请先在此连接一次并允许系统授权。其他 VPN 可能被系统断开。")) {
 +                HStack { Text("连接状态"); Spacer(); Text(vpn.status) }
 +                Button("连接内置 VPN") { Task { try? await vpn.connect() } }
 +                    .disabled(vpn.isBusy)
 +                Button("断开内置 VPN", role: .destructive) { vpn.disconnect() }
 +                    .disabled(vpn.isBusy)
 +                if let error = vpn.lastError { Text(error).foregroundColor(.orange) }
-+            } footer: {
-+                Text("VPN 启动失败会停止自动刷新，并显示原因。后台首次使用前，请先在此连接一次并允许系统授权。其他 VPN 可能被系统断开。")
 +            }
-+            Section {
++            SwiftUI.Section(header: Text("隧道地址"), footer: Text("默认 10.7.0.0 / 10.7.0.1。使用 /32 地址和对端路由，不接管整个局域网。iOS 26.4 及以上若出现子网限制，请按当前网络配置两个可用的同子网地址。修改后需断开再连接。")) {
 +                TextField("隧道 IPv4 地址", text: $deviceIP)
 +                TextField("对端 IPv4 地址", text: $peerIP)
-+            } header: { Text("隧道地址") } footer: {
-+                Text("默认 10.7.0.0 / 10.7.0.1。使用 /32 地址和对端路由，不接管整个局域网。iOS 26.4 及以上若出现子网限制，请按当前网络配置两个可用的同子网地址。修改后需断开再连接。")
 +            }
 +            .keyboardType(.numbersAndPunctuation)
-+            .autocorrectionDisabled()
++            .disableAutocorrection(true)
 +            .disabled(vpn.isBusy || vpn.status != "未连接")
 +            Section {
 +                Link("LocalDevVPN 源码与作者", destination: URL(string: "https://github.com/SiamSadik/LocalDevVPN")!)

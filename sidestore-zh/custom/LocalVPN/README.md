@@ -30,7 +30,7 @@ VPN 连接成功只表明 Network Extension 已启动，配对、锁定服务通
 ## 二合一安装与签名
 
 扩展独立源码编译后放在真正安装的 `LiveContainer.app/PlugIns/LocalVPN.appex`。
-SideStore 使用现有 `Bundle.activeBundle` 宿主映射，从扩展 Info.plist 读取实际 Bundle ID，
+SideStore 使用现有 `Bundle.Info.activeBundle` 宿主映射，从扩展 Info.plist 读取实际 Bundle ID，
 适应安装重签名后的标识，不能用 SideStore framework 的 Bundle ID 推导。
 外层应用和扩展均声明 `packet-tunnel-provider`，外层另声明 `allow-vpn`。
 打包后重新签封外层应用，并验证宿主代码除签名外不变以及扩展位置和权限。
