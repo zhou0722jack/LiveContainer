@@ -168,6 +168,10 @@ for rel in ['.', 'PlugIns/LocalVPN.appex']:
                              str(WORK / args.stage / 'Payload/LiveContainer.app' / rel)], capture_output=True)
     check('localvpn_entitlements:' + rel, result.returncode == 0 and
           'packet-tunnel-provider' in plistlib.loads(result.stdout).get('com.apple.developer.networking.networkextension', []))
+    if rel == '.':
+        entitlements = plistlib.loads(result.stdout)
+        check('host_retains_app_groups', 'group.com.SideStore.SideStore' in entitlements.get('com.apple.security.application-groups', []))
+        check('host_retains_shared_keychain', any(value.endswith('com.kdt.livecontainer.shared') for value in entitlements.get('keychain-access-groups', [])))
 
 report = {
     'artifact': ipa.name,

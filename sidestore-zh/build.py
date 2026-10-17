@@ -4,6 +4,7 @@ import hashlib
 import json
 import os
 import plistlib
+import re
 import shutil
 import subprocess
 import sys
@@ -31,6 +32,23 @@ def read_json(path):
 
 def write_json(path, data):
     path.write_text(json.dumps(data, ensure_ascii=False, indent=2) + '\n')
+
+
+def expand_entitlements(template, settings):
+    settings = {**settings, 'AppIdentifierPrefix': settings.get('AppIdentifierPrefix') or settings['DEVELOPMENT_TEAM'] + '.'}
+    def expand(value):
+        if isinstance(value, dict):
+            return {key: expand(item) for key, item in value.items()}
+        if isinstance(value, list):
+            return [expand(item) for item in value]
+        if isinstance(value, str):
+            def replace(match):
+                key = match.group(1) or match.group(2)
+                require(key in settings, 'Unresolved entitlement setting: ' + key)
+                return settings[key]
+            return re.sub(r'\$\(([^)]+)\)|\$\{([^}]+)\}', replace, value)
+        return value
+    return expand(template)
 
 
 def run(command, cwd=None, log=None):
@@ -264,6 +282,17 @@ def make_host_baseline(work):
     # to the outer app. The installation signer must provision these capabilities.
     result = subprocess.run(['codesign', '-d', '--entitlements', ':-', str(host)], capture_output=True)
     entitlements = plistlib.loads(result.stdout) if result.returncode == 0 and result.stdout.strip() else {}
+    if not entitlements:
+        # CODE_SIGNING_ALLOWED=NO archives have no embedded entitlements. Preserve
+        # the upstream app groups/keychain/debug capabilities from its build settings.
+        settings_output = subprocess.check_output(['xcodebuild', '-showBuildSettings', '-json',
+            '-project', str(work / 'LiveContainer/LiveContainer.xcodeproj'), '-scheme', 'LiveContainer',
+            '-configuration', 'Release', '-sdk', 'iphoneos', 'DEVELOPMENT_TEAM=XYZ0123456',
+            'CODE_SIGNING_ALLOWED=NO', 'CODE_SIGNING_REQUIRED=NO', 'ARCHS=arm64'], text=True)
+        (work / 'host-build-settings.json').write_text(settings_output)
+        settings = next(entry['buildSettings'] for entry in json.loads(settings_output) if entry['target'] == 'LiveContainer')
+        template = work / 'LiveContainer' / settings['CODE_SIGN_ENTITLEMENTS']
+        entitlements = expand_entitlements(plistlib.loads(template.read_bytes()), settings)
     entitlements['com.apple.developer.networking.networkextension'] = ['packet-tunnel-provider']
     entitlements['com.apple.developer.networking.vpn.api'] = ['allow-vpn']
     host_entitlements = work / 'host-localvpn-entitlements.plist'
