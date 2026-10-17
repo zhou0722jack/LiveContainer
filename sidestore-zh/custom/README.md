@@ -10,7 +10,9 @@
 }
 ```
 
-这些文件名是示例；当前两个列表为空。SideStore 先应用汉化，再应用自己的功能。
+上述文件名是示例。当前 SideStore 队列包含 `SideStore/builtin-localvpn.patch`，
+配套扩展源码及使用和签名说明见 [LocalVPN/README.md](LocalVPN/README.md)。
+SideStore 先应用汉化，再应用自己的功能。
 补丁先尝试普通应用，再尝试 Git 三方合并。冲突会停止本次构建，日志上传至 Actions。
 如果自定义补丁需要三方合并基线，在 `inputs.lock.json` 对应项目的 `patch_bases`
 数组加入创建补丁时的完整提交 SHA。汉化补丁基线会自动获取。

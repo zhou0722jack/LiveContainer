@@ -54,6 +54,10 @@ subprocess.run(['codesign', '--force', '--sign', '-', '--timestamp=none',
 subprocess.run(['codesign', '--force', '--sign', '-', '--timestamp=none',
                 '--entitlements', str(WORK / 'LiveContainer/.github/sidelc/LiveWidgetExtension_adhoc.xml'),
                 str(widget)], check=True)
+# Seal the outer bundle after moving extensions, intents and translated resources.
+subprocess.run(['codesign', '--force', '--sign', '-', '--timestamp=none',
+                '--entitlements', str(WORK / 'host-localvpn-entitlements.plist'),
+                str(host)], check=True)
 ipa = OUT / 'LiveContainer+SideStore-zh-Hans.ipa'
 assert not ipa.exists()
 subprocess.run(['zip', '-qry', str(ipa), 'Payload', '-x', '*/.DS_Store', '*/._*', '*/__MACOSX/*'], cwd=STAGE, check=True)

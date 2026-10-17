@@ -1,0 +1,24 @@
+// !$*UTF8*$!
+{
+    archiveVersion = 1;
+    classes = {};
+    objectVersion = 56;
+    objects = {
+        110000000000000000000001 = { isa = PBXProject; buildConfigurationList = 110000000000000000000002; compatibilityVersion = "Xcode 14.0"; developmentRegion = en; hasScannedForEncodings = 0; knownRegions = (en, Base); mainGroup = 110000000000000000000003; productRefGroup = 110000000000000000000004; projectDirPath = ""; projectRoot = ""; targets = (110000000000000000000005); };
+        110000000000000000000002 = { isa = XCConfigurationList; buildConfigurations = (110000000000000000000006); defaultConfigurationIsVisible = 0; defaultConfigurationName = Release; };
+        110000000000000000000003 = { isa = PBXGroup; children = (110000000000000000000007, 110000000000000000000008, 110000000000000000000004); sourceTree = "<group>"; };
+        110000000000000000000004 = { isa = PBXGroup; children = (110000000000000000000009); name = Products; sourceTree = "<group>"; };
+        110000000000000000000005 = { isa = PBXNativeTarget; buildConfigurationList = 110000000000000000000010; buildPhases = (110000000000000000000011, 110000000000000000000012); buildRules = (); dependencies = (); name = LocalVPN; productName = LocalVPN; productReference = 110000000000000000000009; productType = "com.apple.product-type.app-extension"; };
+        110000000000000000000006 = { isa = XCBuildConfiguration; name = Release; buildSettings = { SDKROOT = iphoneos; IPHONEOS_DEPLOYMENT_TARGET = 16.0; SWIFT_VERSION = 5.0; CLANG_ENABLE_MODULES = YES; }; };
+        110000000000000000000007 = { isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PacketTunnelProvider.swift; sourceTree = "<group>"; };
+        110000000000000000000008 = { isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LocalVPNPacket.swift; sourceTree = "<group>"; };
+        110000000000000000000009 = { isa = PBXFileReference; explicitFileType = "wrapper.app-extension"; path = LocalVPN.appex; sourceTree = BUILT_PRODUCTS_DIR; includeInIndex = 0; };
+        110000000000000000000010 = { isa = XCConfigurationList; buildConfigurations = (110000000000000000000013); defaultConfigurationIsVisible = 0; defaultConfigurationName = Release; };
+        110000000000000000000011 = { isa = PBXSourcesBuildPhase; buildActionMask = 2147483647; files = (110000000000000000000014, 110000000000000000000015); runOnlyForDeploymentPostprocessing = 0; };
+        110000000000000000000012 = { isa = PBXFrameworksBuildPhase; buildActionMask = 2147483647; files = (); runOnlyForDeploymentPostprocessing = 0; };
+        110000000000000000000013 = { isa = XCBuildConfiguration; name = Release; buildSettings = { PRODUCT_BUNDLE_IDENTIFIER = com.kdt.livecontainer.LocalVPN; PRODUCT_NAME = LocalVPN; PRODUCT_MODULE_NAME = LocalVPN; INFOPLIST_FILE = Info.plist; CODE_SIGN_ENTITLEMENTS = LocalVPN.entitlements; APPLICATION_EXTENSION_API_ONLY = YES; SWIFT_OPTIMIZATION_LEVEL = "-O"; SKIP_INSTALL = NO; TARGETED_DEVICE_FAMILY = "1,2"; LD_RUNPATH_SEARCH_PATHS = ("$(inherited)", "@executable_path/Frameworks", "@executable_path/../../Frameworks"); }; };
+        110000000000000000000014 = { isa = PBXBuildFile; fileRef = 110000000000000000000007; };
+        110000000000000000000015 = { isa = PBXBuildFile; fileRef = 110000000000000000000008; };
+    };
+    rootObject = 110000000000000000000001;
+}

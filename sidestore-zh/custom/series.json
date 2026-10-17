@@ -1,4 +1,4 @@
 {
-  "LiveContainer": [],
-  "SideStore": []
+  "LiveContainer": ["LiveContainer/localvpn-background-bridge.patch"],
+  "SideStore": ["SideStore/builtin-localvpn.patch"]
 }
