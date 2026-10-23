@@ -20,11 +20,13 @@ public final class SSStikDebugCore: NSObject {
             func complete(_ result: [String: Any]) {
                 DispatchQueue.main.async { _ = reply.perform(NSSelectorFromString("complete:"), with: result as NSDictionary) }
             }
+            var stage = "检查参数"
             do {
                 let operation = request["operation"] as? String ?? ""
                 let library = FileManager.default.urls(for: .libraryDirectory, in: .userDomainMask)[0]
                 let paths = DDIPaths.default(in: library.appendingPathComponent("SideStoreStikDebug"))
                 if operation == "reset" {
+                    stage = "重置 DDI 缓存"
                     try StikJIT.resetCachedDDI(at: paths)
                     complete(["message": "DDI 缓存已重置，下次准备时重新下载。"])
                     return
@@ -58,29 +60,40 @@ public final class SSStikDebugCore: NSObject {
                     }
                 }
                 if operation == "prepare" {
+                    stage = "准备设备 / 挂载 DDI"
                     let state = try prepare()
                     complete(["message": "设备准备完成；TXM/SPTM：" + (state.isTXMPresent.map { $0 ? "存在" : "不存在" } ?? "未知")])
                     return
                 }
                 guard operation == "list" || operation == "enable" else { throw Self.failure("不支持的调试操作。") }
+                stage = "连接调试隧道"
+                progress(stage + "…")
                 let remote = try RemoteDevice(pairing: file, config: config)
                 let excluded = Set(request["excludedBundleIDs"] as? [String] ?? [])
+                stage = "读取 App 列表"
+                progress(stage + "…")
                 let apps = try remote.debuggableApps().filter { !excluded.contains($0["bundleID"] ?? "") }
                 if operation == "list" { complete(["apps": apps, "message": "已找到 \(apps.count) 个可调试 App。"]); return }
                 guard operation == "enable", let bundleID = request["bundleID"] as? String,
                       apps.contains(where: { $0["bundleID"] == bundleID }) else {
                     throw Self.failure("目标 App 不在可调试列表中，或缺少 get-task-allow；不能调试当前二合一宿主。")
                 }
+                stage = "准备设备 / 挂载 DDI"
                 _ = try prepare()
+                stage = "启动目标 App"
                 progress("启动目标 App…")
                 let pid = try remote.launch(bundleID)
                 guard pid > 0, pid != getpid() else { throw Self.failure("不能从当前进程为自身启用 JIT。") }
+                stage = "启用 JIT"
                 try StikJIT.enableJIT(targetPID: pid, pairingFile: pairing, ddiPaths: paths,
                     configuration: config, script: .universal,
                     forceScript: request["forceScript"] as? Bool ?? false,
                     preparationProgress: reportStage, progress: progress)
                 complete(["message": "JIT 调试流程已完成。目标 App 是否能够执行 JIT，仍需在目标内验证。"])
-            } catch { complete(["error": error.localizedDescription]) }
+            } catch {
+                let detail = error as NSError
+                complete(["error": "步骤：\(stage)\n\(detail.localizedDescription)\n错误标识：\(detail.domain) (\(detail.code))"])
+            }
         }
     }
 
@@ -137,17 +150,31 @@ private final class RemoteDevice {
         }
         var result: [[String: String]] = []
         for index in 0..<count {
-            var binary: UnsafeMutablePointer<CChar>?
-            var length: UInt32 = 0
-            guard plist_to_bin(apps[index], &binary, &length) == PLIST_ERR_SUCCESS, let binary else { continue }
-            let data = Data(bytes: binary, count: Int(length))
-            plist_mem_free(binary)
-            guard let info = try PropertyListSerialization.propertyList(from: data, format: nil) as? [String: Any],
-                  let entitlements = info["Entitlements"] as? [String: Any],
-                  (entitlements["get-task-allow"] as? NSNumber)?.boolValue == true,
-                  let identifier = info["CFBundleIdentifier"] as? String else { continue }
-            let name = info["CFBundleDisplayName"] as? String ?? info["CFBundleName"] as? String ?? identifier
-            result.append(["name": name, "bundleID": identifier])
+            guard let app = apps[index] else { continue }
+            if let descriptor = StikAppMetadataReader.descriptor(from: app,
+                item: { node, key in
+                    guard plist_get_node_type(node) == PLIST_DICT else { return nil }
+                    return plist_dict_get_item(node, key)
+                }, string: { node in
+                    guard plist_get_node_type(node) == PLIST_STRING else { return nil }
+                    var value: UnsafeMutablePointer<CChar>?
+                    plist_get_string_val(node, &value)
+                    guard let value else { return nil }
+                    defer { plist_mem_free(value) }
+                    return String(validatingUTF8: value)
+                }, boolean: { node in
+                    switch plist_get_node_type(node) {
+                    case PLIST_BOOLEAN:
+                        var value: UInt8 = 0
+                        plist_get_bool_val(node, &value)
+                        return value != 0
+                    case PLIST_INT:
+                        var value: UInt64 = 0
+                        plist_get_uint_val(node, &value)
+                        return value != 0
+                    default: return nil
+                    }
+                }) { result.append(descriptor) }
         }
         return result.sorted { ($0["name"] ?? "").localizedStandardCompare($1["name"] ?? "") == .orderedAscending }
     }

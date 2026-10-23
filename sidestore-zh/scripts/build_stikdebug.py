@@ -23,7 +23,8 @@ command = ['xcrun', '--sdk', 'iphoneos', 'swiftc', '-emit-library', '-O', '-swif
 for name in ['Foundation', 'JavaScriptCore', 'Network', 'Security', 'CFNetwork', 'SystemConfiguration', 'IOKit']:
     command += ['-framework', name]
 command += [str(path) for path in sorted((source / 'Sources').glob('*.swift'))]
-command += [str(work / 'SSStikDebugCore.swift'), '-o', str(framework / 'SideStoreStikDebugCore')]
+command += [str(work / 'SSStikDebugCore.swift'), str(work / 'StikAppMetadataReader.swift'),
+            '-o', str(framework / 'SideStoreStikDebugCore')]
 subprocess.run(command, check=True)
 for script in (source / 'Resources').glob('*.js'):
     shutil.copy2(script, framework / script.name)

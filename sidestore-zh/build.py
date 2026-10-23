@@ -115,8 +115,9 @@ def validate_source(work, allow_generated=False):
     manifest = read_json(work / 'source-manifest.json')
     candidate = read_json(work.parent / 'candidate.json')
     if 'StikJIT' in candidate['sources']:
-        require(digest(work / 'SSStikDebugCore.swift') == candidate['recipe']['sidestore-zh/custom/StikDebug/SSStikDebugCore.swift'],
-                'StikDebug integration source changed')
+        for name in ['SSStikDebugCore.swift', 'StikAppMetadataReader.swift']:
+            require(digest(work / name) == candidate['recipe']['sidestore-zh/custom/StikDebug/' + name],
+                    'StikDebug integration source changed: ' + name)
     for name, entry in read_json(work.parent / 'candidate.json')['sources'].items():
         source = work / name
         require(git(source, 'rev-parse', 'HEAD') == entry['commit'], f'Wrong {name} revision')
@@ -177,6 +178,7 @@ def prepare(root, args):
             require(patch.is_relative_to((BASE / 'custom').resolve()) and patch.suffix == '.patch', 'Invalid custom patch path')
             apply_patch(work / name, patch, work / f'patch-{name}-{index}.log')
     shutil.copy2(BASE / 'custom/StikDebug/SSStikDebugCore.swift', work / 'SSStikDebugCore.swift')
+    shutil.copy2(BASE / 'custom/StikDebug/StikAppMetadataReader.swift', work / 'StikAppMetadataReader.swift')
     shutil.copy2(BASE / 'custom/StikDebug/SideStoreStikDebugView.swift',
                  source / 'SideStore/Views/Settings/Diagnostics/SideStoreStikDebugView.swift')
     manifest = {name: {'files': snapshot(work / name),
