@@ -74,7 +74,11 @@ with zipfile.ZipFile(ipa) as package, zipfile.ZipFile(WORK / 'lc-nightly.ipa') a
     ui_binary = package.read(top + 'Frameworks/LiveContainerSwiftUI.framework/LiveContainerSwiftUI')
     check('livecontainer_builtin_jit_coordinator', b'LCBuiltInJIT' in ui_binary)
     check('livecontainer_builtin_jit_handoff', b'SSBuiltInJITPendingContainer' in ui_binary)
-    check('liveprocess_builtin_jit_wait', b'LC_BUILTIN_JIT_AWAIT' in package.read(top + 'PlugIns/LiveProcess.appex/LiveProcess'))
+    shared_binary = package.read(top + 'Frameworks/LiveContainerShared.framework/LiveContainerShared')
+    check('stikdebug_main_process_entry', b'SSStikDebugStartMainProcess' in core_binary)
+    check('livecontainer_main_jit_bootstrap', b'SSStikDebugStartMainProcess' in shared_binary)
+    check('livecontainer_fullscreen_jit_handoff', b'SSBuiltInJITFullScreenLaunch' in shared_binary
+          and b'SSBuiltInJITFullScreenLaunch' in ui_binary)
     check('stikdebug_universal_script', len(package.read(core + 'universal.js')) > 100)
     check('stikdebug_licenses', b'AFFERO GENERAL PUBLIC LICENSE' in package.read(top + 'LICENSE-StikDebug.txt')
           and b'Mozilla Public License' in package.read(core + 'LICENSE-StikJIT.txt'))
@@ -175,6 +179,7 @@ report = {
     'refresh_and_guest_launch': 'UNRUN',
     'stikdebug_device_pairing_ddi_jit': 'UNRUN',
     'stikdebug_container_search_and_helper_jit': 'UNRUN',
+    'stikdebug_ordinary_fullscreen_main_process_jit': 'UNRUN',
     'distribution_signing': 'Requires iloader to re-sign with user account. Ad-hoc signatures are not device installation authorization.'
 }
 (OUT / args.report).write_text(json.dumps(report, indent=2) + '\n')

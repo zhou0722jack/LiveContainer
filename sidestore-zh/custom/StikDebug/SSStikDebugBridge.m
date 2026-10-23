@@ -74,6 +74,8 @@ void SSStikDebugExecuteInHelper(NSDictionary *request) {
     dispatch_async(dispatch_get_main_queue(), ^{
         id receiver = request[@"reply"];
         if (!receiver) return;
+        SEL shouldStart = NSSelectorFromString(@"shouldStartHelper");
+        if ([receiver respondsToSelector:shouldStart] && !((BOOL (*)(id, SEL))objc_msgSend)(receiver, shouldStart)) return;
         if (SSActiveSessions.count > 0) { SSReply(receiver, @"complete:", SSFailure(@"已有内置 JIT 任务正在运行，请等待完成。")); return; }
         if (@available(iOS 17.4, *)) {} else { SSReply(receiver, @"complete:", SSFailure(@"内置 JIT 需要 iOS 17.4 或更新版本。")); return; }
         NSString *hostPath = request[@"hostBundlePath"];
@@ -127,6 +129,99 @@ void SSStikDebugExecuteInHelper(NSDictionary *request) {
             }
         });
     });
+}
+
+// The host changes HOME, Bundle.main and preference domains while loading the
+// guest. Capture absolute host URLs now; never resolve them in late callbacks.
+@interface SSStikDebugMainReply : NSObject
+@property(strong) NSURL *reportURL;
+@property(strong) NSDictionary *identity;
+@property BOOL finished;
+@property(copy) NSString *error;
+- (BOOL)record:(NSString *)state error:(NSString *)error;
+- (void)complete:(NSDictionary *)result;
+@end
+@implementation SSStikDebugMainReply
+- (BOOL)shouldStartHelper { return !self.finished; }
+- (BOOL)record:(NSString *)state error:(NSString *)error {
+    NSMutableDictionary *report = self.identity.mutableCopy;
+    report[@"state"] = state;
+    if (error) report[@"error"] = error;
+    return [report writeToURL:self.reportURL atomically:YES];
+}
+- (void)progress:(NSString *)message { /* Device/script progress is not JIT success. */ }
+- (void)complete:(NSDictionary *)result {
+    if (self.finished) return;
+    self.finished = YES;
+    self.error = result[@"error"];
+    [self record:self.error ? @"failed" : @"complete" error:self.error];
+}
+@end
+
+static void SSCancelMainHelper(SSStikDebugMainReply *receiver, NSString *error) {
+    [receiver complete:SSFailure(error)];
+    // Even an apparent helper success is not sufficient if the target never
+    // observed attachment. Do not leave a misleading success receipt behind.
+    receiver.error = error;
+    [receiver record:@"failed" error:error];
+    // Cancel only this startup's session. Never kill a later/unrelated helper.
+    for (SSStikDebugHostSession *session in SSActiveSessions.copy) {
+        if (session.receiver != receiver) continue;
+        [session.child _kill:SIGKILL];
+        [session finish:SSFailure(error)];
+    }
+}
+
+NSString *SSStikDebugStartMainProcess(NSDictionary *request, NSTimeInterval timeout, BOOL (^isDebugged)(void)) {
+    if (!NSThread.isMainThread) return @"内置 JIT 全屏启动必须在主线程执行。";
+    NSDictionary *handoff = request[@"handoff"];
+    if (![handoff isKindOfClass:NSDictionary.class]) return @"缺少内置 JIT 全屏启动交接。";
+    NSDate *created = handoff[@"created"];
+    NSNumber *origin = handoff[@"originPID"];
+    if (![created isKindOfClass:NSDate.class] || created.timeIntervalSinceNow > 0 || created.timeIntervalSinceNow < -60 ||
+        ![origin isKindOfClass:NSNumber.class] || origin.intValue <= 0 || origin.intValue == getpid() ||
+        ![handoff[@"app"] isKindOfClass:NSString.class] || ![handoff[@"app"] isEqual:request[@"selectedApp"]] ||
+        ![handoff[@"container"] isKindOfClass:NSString.class] || ![handoff[@"container"] isEqual:request[@"selectedContainer"]]) {
+        return @"内置 JIT 启动交接过期或目标不一致，已取消；请重新选择 App。";
+    }
+    NSString *home = request[@"hostHome"];
+    NSString *bundle = request[@"hostBundlePath"];
+    if (![home isKindOfClass:NSString.class] || !home.isAbsolutePath ||
+        ![bundle isKindOfClass:NSString.class] || !bundle.isAbsolutePath || timeout <= 0 || timeout > 15) {
+        return @"无法确定全屏启动的宿主目录或等待时限。";
+    }
+    NSURL *library = [NSURL fileURLWithPath:[home stringByAppendingPathComponent:@"Library"]];
+    SSStikDebugMainReply *receiver = [SSStikDebugMainReply new];
+    receiver.reportURL = [library URLByAppendingPathComponent:@"SSBuiltInJITLaunchStatus.plist"];
+    receiver.identity = @{ @"pid": @(getpid()), @"app": handoff[@"app"], @"container": handoff[@"container"] };
+    if (![receiver record:@"attaching" error:nil]) return @"无法保存内置 JIT 启动状态，请检查宿主存储空间。";
+    NSString *sideStore = [home stringByAppendingPathComponent:@"Documents/SideStore"];
+    NSString *pairing = [sideStore stringByAppendingPathComponent:@"Documents/PairingFile_RemoteRP.plist"];
+    NSDictionary *config = [NSDictionary dictionaryWithContentsOfFile:[sideStore stringByAppendingPathComponent:@"Library/Preferences/SSBuiltInJITConnection.plist"]] ?: @{};
+    NSMutableDictionary *operation = [@{ @"operation": @"enablePID", @"targetPID": @(getpid()),
+        @"hostBundlePath": bundle, @"pairingPath": pairing, @"reply": receiver,
+        @"address": config[@"address"] ?: @"10.7.0.1", @"port": config[@"port"] ?: @49152 } mutableCopy];
+    if (handoff[@"scriptData"]) operation[@"scriptData"] = handoff[@"scriptData"];
+    SSStikDebugExecuteInHelper(operation);
+    // No UIKit app or guest code has been initialized yet. Pump the main run
+    // loop so the extension and XPC callbacks can run; never block it on a sem.
+    // On TXM, waiting for SCRIPT completion here would deadlock: the script
+    // needs the guest to enter main and issue its JIT memory-region requests.
+    CFAbsoluteTime deadline = CFAbsoluteTimeGetCurrent() + timeout;
+    BOOL attached = NO;
+    while (!receiver.error && !(attached = isDebugged()) && !receiver.finished && CFAbsoluteTimeGetCurrent() < deadline) {
+        CFRunLoopRunInMode(kCFRunLoopDefaultMode, 0.01, true);
+    }
+    if (receiver.error) return receiver.error;
+    if (!attached) {
+        NSString *error = @"全屏启动未在时限内确认调试器附加，已取消本次 JIT。请检查 Remote Pairing、LocalDevVPN 和调试权限后重试。";
+        SSCancelMainHelper(receiver, error);
+        return error;
+    }
+    if (!receiver.finished) [receiver record:@"running" error:nil];
+    // SSActiveSessions retains the receiver/listener until the actual script
+    // result. The main process proceeds into the guest without any restart.
+    return nil;
 }
 
 @interface SSStikDebugChildReply : NSObject

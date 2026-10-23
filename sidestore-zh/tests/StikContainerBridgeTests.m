@@ -1,5 +1,6 @@
 #import <Foundation/Foundation.h>
 #import "SSStikDebugBridge.h"
+#import <objc/runtime.h>
 
 static NSURL *groupDirectory;
 static NSUserDefaults *testDefaults;
@@ -28,6 +29,115 @@ static NSUInteger launchCount;
 - (void)progress:(NSString *)message { self.progressCount++; }
 - (void)complete:(NSDictionary *)result { self.resultCount++; self.result = result; }
 @end
+
+// Keep the real bridge and anonymous XPC transport. Substitute only iOS's
+// private extension launcher and the target's csops probe on this macOS host.
+@interface SSStikDebugCore : NSObject @end
+@implementation SSStikDebugCore @end
+static BOOL fakeAttached;
+static BOOL attachOnLaunch;
+static NSDictionary *resultOnLaunch;
+static NSUInteger helperLaunches;
+static NSUInteger helperKills;
+static NSDictionary *helperPayload;
+static NSXPCConnection *helperConnection;
+@interface FakeLiveProcess : NSObject
++ (id)extensionWithIdentifier:(NSString *)identifier error:(NSError **)error;
+@end
+@implementation FakeLiveProcess
++ (id)extensionWithIdentifier:(NSString *)identifier error:(NSError **)error { return [self new]; }
+- (void)setRequestCancellationBlock:(id)block {}
+- (void)setRequestInterruptionBlock:(id)block {}
+- (void)_kill:(int)signal { helperKills++; [helperConnection invalidate]; helperConnection = nil; }
+- (void)beginExtensionRequestWithInputItems:(NSArray *)items completion:(void (^)(NSUUID *))completion {
+    helperLaunches++;
+    NSDictionary *info = [items.firstObject userInfo];
+    helperPayload = info[@"SSStikDebugRequest"];
+    helperConnection = [[NSXPCConnection alloc] initWithListenerEndpoint:info[@"SSStikDebugEndpoint"]];
+    helperConnection.remoteObjectInterface = [NSXPCInterface interfaceWithProtocol:@protocol(SSStikDebugHelperHost)];
+    [helperConnection resume];
+    [[helperConnection remoteObjectProxy] reportProgress:@"Debugger preparing"];
+    if (resultOnLaunch) [[helperConnection remoteObjectProxy] reportResult:resultOnLaunch withReply:^{}];
+    fakeAttached = attachOnLaunch;
+    completion(NSUUID.UUID);
+}
+@end
+
+static void finishMainHelper(NSDictionary *result) {
+    __block BOOL acknowledged = NO;
+    [[helperConnection remoteObjectProxy] reportResult:result withReply:^{ acknowledged = YES; }];
+    NSDate *deadline = [NSDate dateWithTimeIntervalSinceNow:3];
+    while (!acknowledged && deadline.timeIntervalSinceNow > 0) CFRunLoopRunInMode(kCFRunLoopDefaultMode, 0.01, true);
+    assert(acknowledged);
+    [helperConnection invalidate];
+    helperConnection = nil;
+}
+
+static void checkMainBootstrap(NSURL *home) {
+    Class extension = NSClassFromString(@"NSExtension");
+    if (!extension) { extension = objc_allocateClassPair(NSObject.class, "NSExtension", 0); objc_registerClassPair(extension); }
+    Method replacement = class_getClassMethod(FakeLiveProcess.class, @selector(extensionWithIdentifier:error:));
+    // Return FakeLiveProcess objects, including if the system defines NSExtension.
+    IMP makeHelper = imp_implementationWithBlock(^id(id self, NSString *identifier, NSError **error) { return [FakeLiveProcess new]; });
+    class_replaceMethod(object_getClass(extension), @selector(extensionWithIdentifier:error:), makeHelper, method_getTypeEncoding(replacement));
+    NSURL *host = [home URLByAppendingPathComponent:@"Host.app"];
+    [NSFileManager.defaultManager createDirectoryAtURL:host withIntermediateDirectories:YES attributes:nil error:nil];
+    [@{ @"CFBundleIdentifier": @"test.host", @"CFBundlePackageType": @"APPL" } writeToURL:[host URLByAppendingPathComponent:@"Info.plist"] atomically:YES];
+    NSBundle *bundle = [NSBundle bundleWithURL:host];
+    assert(bundle.builtInPlugInsURL != nil);
+    NSURL *plugin = [bundle.builtInPlugInsURL URLByAppendingPathComponent:@"LiveProcess.appex"];
+    [NSFileManager.defaultManager createDirectoryAtURL:plugin withIntermediateDirectories:YES attributes:nil error:nil];
+    [@{ @"CFBundleIdentifier": @"test.host.LiveProcess" } writeToURL:[plugin URLByAppendingPathComponent:@"Info.plist"] atomically:YES];
+    NSURL *pairing = [home URLByAppendingPathComponent:@"Documents/SideStore/Documents/PairingFile_RemoteRP.plist"];
+    [NSFileManager.defaultManager createDirectoryAtURL:pairing.URLByDeletingLastPathComponent withIntermediateDirectories:YES attributes:nil error:nil];
+    [@{ @"test": @YES } writeToURL:pairing atomically:YES];
+    [NSFileManager.defaultManager createDirectoryAtURL:[home URLByAppendingPathComponent:@"Library"] withIntermediateDirectories:YES attributes:nil error:nil];
+    NSURL *report = [home URLByAppendingPathComponent:@"Library/SSBuiltInJITLaunchStatus.plist"];
+    NSMutableDictionary *handoff = [@{ @"app": @"Visible.app", @"container": @"data-uuid", @"created": NSDate.date,
+        @"originPID": @(getpid() + 1), @"scriptData": @"dGVzdA==" } mutableCopy];
+    NSDictionary *request = @{ @"handoff": handoff, @"selectedApp": @"Visible.app", @"selectedContainer": @"data-uuid",
+        @"hostHome": home.path, @"hostBundlePath": host.path };
+    BOOL (^probe)(void) = ^{ return fakeAttached; };
+
+    attachOnLaunch = YES;
+    NSString *error = SSStikDebugStartMainProcess(request, 1, probe);
+    assert(error == nil && helperLaunches == 1 && helperKills == 0);
+    assert([helperPayload[@"targetPID"] intValue] == getpid());
+    assert([helperPayload[@"operation"] isEqual:@"enablePID"]);
+    assert([helperPayload[@"scriptData"] isEqual:@"dGVzdA=="]);
+    assert(helperPayload[@"pairingPath"] == nil && helperPayload[@"pairingData"] != nil);
+    assert([[NSDictionary dictionaryWithContentsOfURL:report][@"state"] isEqual:@"running"]);
+    // Attachment unblocks guest startup, but is not reported as script success.
+    finishMainHelper(@{ @"error": @"script failure after guest main" });
+    assert([[NSDictionary dictionaryWithContentsOfURL:report][@"error"] isEqual:@"script failure after guest main"]);
+
+    fakeAttached = NO;
+    error = SSStikDebugStartMainProcess(request, 1, probe);
+    assert(error == nil && helperLaunches == 2);
+    finishMainHelper(@{ @"message": @"script finished" });
+    assert([[NSDictionary dictionaryWithContentsOfURL:report][@"state"] isEqual:@"complete"]);
+
+    fakeAttached = NO; attachOnLaunch = NO;
+    error = SSStikDebugStartMainProcess(request, 0.08, probe);
+    assert(error != nil && helperLaunches == 3 && helperKills == 1);
+    assert([[NSDictionary dictionaryWithContentsOfURL:report][@"state"] isEqual:@"failed"]);
+
+    // A success callback without observed target attachment must stay a failure.
+    resultOnLaunch = @{ @"message": @"misleading helper success" };
+    error = SSStikDebugStartMainProcess(request, 1, probe);
+    assert(error != nil && helperLaunches == 4 && helperKills == 1);
+    assert([[NSDictionary dictionaryWithContentsOfURL:report][@"state"] isEqual:@"failed"]);
+    [helperConnection invalidate]; helperConnection = nil;
+    resultOnLaunch = nil;
+
+    handoff[@"created"] = [NSDate dateWithTimeIntervalSinceNow:-61];
+    assert(SSStikDebugStartMainProcess(request, 1, probe) != nil && helperLaunches == 4);
+    handoff[@"created"] = NSDate.date; handoff[@"originPID"] = @(getpid());
+    assert(SSStikDebugStartMainProcess(request, 1, probe) != nil && helperLaunches == 4);
+    handoff[@"originPID"] = @(getpid() + 1); handoff[@"container"] = @"other-container";
+    assert(SSStikDebugStartMainProcess(request, 1, probe) != nil && helperLaunches == 4);
+    puts("PASS: main-process PID, attachment gate, delayed script result, scoped timeout and stale-target rejection");
+}
 
 static void checkXPCReply(void) {
     NSObject *session = [NSClassFromString(@"SSStikDebugHostSession") new];
@@ -103,6 +213,7 @@ int main(void) {
             assert(![testDefaults boolForKey:@"LCOpenSideStore"]);
             puts("PASS: actual native container enumeration and launch handoff");
             checkXPCReply();
+            checkMainBootstrap(home);
         } @finally {
             [testDefaults removePersistentDomainForName:suite];
             [NSFileManager.defaultManager removeItemAtURL:temporary error:nil];

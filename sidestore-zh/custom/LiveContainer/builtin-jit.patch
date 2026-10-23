@@ -1,46 +1,128 @@
 diff --git a/LiveContainer/LCBootstrap.m b/LiveContainer/LCBootstrap.m
-index 0a88b7f95e5a2b67e99cab0900eb665608959e6c..41906657c5aff9490e3e0f1861cec36cf7637a8c 100644
+index 0a88b7f95e5a2b67e99cab0900eb665608959e6c..6493fa42b94ad770f6efb7c56d39808915d61df2 100644
 --- a/LiveContainer/LCBootstrap.m
 +++ b/LiveContainer/LCBootstrap.m
-@@ -250,6 +250,22 @@ void overwriteExecPath(const char *newExecPath) {
- 
- static NSString* invokeAppMain(NSString *selectedApp, NSString *selectedContainer, int argc, char *argv[]) {
-     NSString *appError = nil;
-+    if (isLiveProcess && !isSideStore && getenv("LC_BUILTIN_JIT_AWAIT")) {
-+        unsetenv("LC_BUILTIN_JIT_AWAIT");
-+        void *task = SecTaskCreateFromSelf(NULL);
-+        CFTypeRef entitlement = task ? SecTaskCopyValueForEntitlement(task, CFSTR("get-task-allow"), NULL) : NULL;
-+        BOOL allowed = entitlement == kCFBooleanTrue;
-+        if (entitlement) CFRelease(entitlement);
-+        if (task) CFRelease((CFTypeRef)task);
-+        if (!allowed) return @"容器 LiveProcess 缺少 get-task-allow，请保留调试权限和扩展重新签名。";
-+        BOOL attached = NO;
-+        for (int attempt = 0; attempt < 1200; attempt++) {
-+            int flags = 0;
-+            if (csops(getpid(), 0, &flags, sizeof(flags)) == 0 && (flags & CS_DEBUGGED)) { attached = YES; break; }
-+            usleep(100000);
-+        }
-+        if (!attached) return @"等待内置 JIT 调试器超时，请确认 Remote Pairing、LocalDevVPN 及辅助进程状态。";
-+    }
-     if([[lcUserDefaults objectForKey:@"LCWaitForDebugger"] boolValue]) {
-         sleep(100);
+@@ -662,6 +662,28 @@ static void exceptionHandler(NSException *exception) {
      }
+ }
+ 
++static NSString *startBuiltInJITForMain(NSDictionary *handoff, NSString *app, NSString *container) {
++    if (@available(iOS 17.4, *)) {} else { return @"内置 JIT 需要 iOS 17.4 或更新版本。"; }
++    void *task = SecTaskCreateFromSelf(NULL);
++    CFTypeRef entitlement = task ? SecTaskCopyValueForEntitlement(task, CFSTR("get-task-allow"), NULL) : NULL;
++    BOOL allowed = entitlement == kCFBooleanTrue;
++    if (entitlement) CFRelease(entitlement);
++    if (task) CFRelease((CFTypeRef)task);
++    if (!allowed) return @"宿主缺少 get-task-allow，请使用保留调试权限的方式签名。";
++    NSString *path = [lcMainBundle.bundlePath stringByAppendingPathComponent:@"Frameworks/SideStoreStikDebugCore.framework/SideStoreStikDebugCore"];
++    // Keep the framework mapped while the helper delivers late script results.
++    static void *core;
++    core = dlopen(path.fileSystemRepresentation, RTLD_NOW | RTLD_LOCAL);
++    if (!core) return @"无法加载内置 JIT 核心，请安装完整二合一包。";
++    NSString *(*start)(NSDictionary *, NSTimeInterval, BOOL (^)(void)) = dlsym(core, "SSStikDebugStartMainProcess");
++    if (!start) return @"内置 JIT 核心缺少全屏启动接口，请更新完整安装包。";
++    return start(@{ @"handoff": handoff, @"selectedApp": app ?: @"", @"selectedContainer": container ?: @"",
++        @"hostBundlePath": lcMainBundle.bundlePath, @"hostHome": @(getenv("LC_HOME_PATH")) }, 12.0, ^BOOL{
++        int flags = 0;
++        return csops(getpid(), 0, &flags, sizeof(flags)) == 0 && (flags & CS_DEBUGGED) != 0;
++    });
++}
++
+ int LiveContainerMain(int argc, char *argv[]) {
+     lcMainBundle = [NSBundle mainBundle];
+     lcUserDefaults = NSUserDefaults.standardUserDefaults;
+@@ -672,6 +694,15 @@ int LiveContainerMain(int argc, char *argv[]) {
+     isLiveProcess = [lcAppUrlScheme isEqualToString:@"liveprocess"];
+     setenv("LC_HOME_PATH", getenv("HOME"), 0);
+ 
++    // Consume once, before any guest path/preference changes. A failed launch
++    // or a subsequent open of the LC UI must never reuse an old target/PID.
++    NSDictionary *fullScreenJIT = nil;
++    if (!isLiveProcess) {
++        fullScreenJIT = [lcUserDefaults dictionaryForKey:@"SSBuiltInJITFullScreenLaunch"];
++        [lcUserDefaults removeObjectForKey:@"SSBuiltInJITFullScreenLaunch"];
++        [lcUserDefaults synchronize];
++    }
++
+     NSString *selectedApp = [lcUserDefaults stringForKey:@"selected"];
+     NSString *selectedContainer = [lcUserDefaults stringForKey:@"selectedContainer"];
+     NSString *launchUrl = nil;
+@@ -798,6 +829,18 @@ int LiveContainerMain(int argc, char *argv[]) {
+ 
+     }
+     NSSetUncaughtExceptionHandler(&exceptionHandler);
++    if (fullScreenJIT && selectedApp && !isLiveProcess && !isSideStore) {
++        NSString *error = startBuiltInJITForMain(fullScreenJIT, selectedApp, selectedContainer);
++        if (error) {
++            // Identity/hooks are still untouched, so return to the ordinary LC
++            // UI and show the error instead of loading a guest without JIT.
++            [lcUserDefaults setObject:error forKey:@"error"];
++            [lcUserDefaults removeObjectForKey:@"selected"];
++            [lcUserDefaults removeObjectForKey:@"selectedContainer"];
++            [lcUserDefaults removeObjectForKey:@"launchAppUrlScheme"];
++            selectedApp = nil;
++        }
++    }
+     if (selectedApp || isSideStore) {
+         [lcUserDefaults removeObjectForKey:@"selected"];
+         [lcUserDefaults removeObjectForKey:@"selectedContainer"];
 diff --git a/LiveContainerSwiftUI/Models/LCAppModel.swift b/LiveContainerSwiftUI/Models/LCAppModel.swift
-index e49b2ca5d88a09de1d4a993642e8b72f53e70b4a..cd7e8e82c548957eae102f8a02ff2fdf1ddb40bf 100644
+index e49b2ca5d88a09de1d4a993642e8b72f53e70b4a..942af65f322ba147e43eb250d6e4f93e47c87945 100644
 --- a/LiveContainerSwiftUI/Models/LCAppModel.swift
 +++ b/LiveContainerSwiftUI/Models/LCAppModel.swift
-@@ -233,7 +233,9 @@ class LCAppModel: ObservableObject, Hashable {
+@@ -233,7 +233,12 @@ class LCAppModel: ObservableObject, Hashable {
          let currentDataFolder = containerFolderName ?? uiSelectedContainer?.folderName
          
          let classicMode = appInfo.defaultClassicMode
 -        let multitask = classicMode == 0 ? (multitask ?? shouldLaunchInMultitaskMode) : false
 +        let builtInJIT = LCUtils.appGroupUserDefault.integer(forKey: "LCJITEnablerType") == JITEnablerType.BuiltIn.rawValue &&
 +            (forceJIT ?? (appInfo.isJITNeeded || appInfo.is32bit))
-+        let multitask = classicMode == 0 ? (builtInJIT || (multitask ?? shouldLaunchInMultitaskMode)) : false
++        let multitask = classicMode == 0 && !builtInJIT ? (multitask ?? shouldLaunchInMultitaskMode) : false
++        if builtInJIT && MultitaskManager.isMultitasking() {
++            throw "内置 JIT 使用普通全屏启动，请先关闭正在运行的多任务 App 后重试。"
++        }
          
          if MultitaskManager.isMultitasking() || multitask,
             let currentDataFolder {
-@@ -339,7 +341,38 @@ class LCAppModel: ObservableObject, Hashable {
+@@ -253,6 +258,9 @@ class LCAppModel: ObservableObject, Hashable {
+             let fn = uiSelectedContainer?.folderName,
+             var runningLC = LCSharedUtils.getContainerUsingLCScheme(withFolderName: fn)
+         {
++            if builtInJIT {
++                throw "此容器已在其他实例中运行，请先退出该 App，再使用内置 JIT 全屏启动。"
++            }
+             runningLC = (runningLC as NSString).deletingPathExtension
+             
+             var openURLComp = URLComponents()
+@@ -322,15 +330,19 @@ class LCAppModel: ObservableObject, Hashable {
+         }
+         try await signApp(force: false)
+         
+-        if let bundleIdOverride {
+-            UserDefaults.standard.set(bundleIdOverride, forKey: "selected")
+-        } else {
+-            UserDefaults.standard.set(self.appInfo.relativeBundlePath, forKey: "selected")
+-        }
+-        if let urlStr {
+-            UserDefaults.standard.setValue(urlStr, forKey: "launchAppUrlScheme")
++        // Built-in JIT stages selection only after preparation succeeds, so a
++        // failed preparation cannot leave a guest selected for the next open.
++        if !builtInJIT {
++            if let bundleIdOverride {
++                UserDefaults.standard.set(bundleIdOverride, forKey: "selected")
++            } else {
++                UserDefaults.standard.set(self.appInfo.relativeBundlePath, forKey: "selected")
++            }
++            if let urlStr {
++                UserDefaults.standard.setValue(urlStr, forKey: "launchAppUrlScheme")
++            }
++            UserDefaults.standard.set(uiSelectedContainer?.folderName, forKey: "selectedContainer")
+         }
+-        UserDefaults.standard.set(uiSelectedContainer?.folderName, forKey: "selectedContainer")
+         
+         var jitNeeded = appInfo.isJITNeeded || appInfo.is32bit
+         if let forceJIT {
+@@ -339,7 +351,34 @@ class LCAppModel: ObservableObject, Hashable {
  #if targetEnvironment(simulator)
          jitNeeded = false
  #endif
@@ -54,27 +136,23 @@ index e49b2ca5d88a09de1d4a993642e8b72f53e70b4a..cd7e8e82c548957eae102f8a02ff2fdf
 +            // Prepare before starting the target so a first DDI download cannot
 +            // exhaust the guest's wait-for-debugger deadline.
 +            try await LCBuiltInJIT.prepare()
-+            let waitKey = "SSBuiltInJITAwait." + folder
-+            defer { UserDefaults.standard.removeObject(forKey: waitKey) }
-+            try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<Void, Error>) in
-+                Task { @MainActor in
-+                // Preparation suspends this operation. Restore and snapshot the
-+                // exact target on the UI actor immediately before launching it.
-+                UserDefaults.standard.set(bundleIdOverride ?? self.appInfo.relativeBundlePath, forKey: "selected")
++            try await MainActor.run {
++                guard !MultitaskManager.isMultitasking(),
++                      LCSharedUtils.getContainerUsingLCScheme(withFolderName: folder) == nil else {
++                    throw "准备期间容器或多任务状态发生变化，请先关闭正在运行的 App 后重试。"
++                }
++                guard let selected = bundleIdOverride ?? self.appInfo.relativeBundlePath else {
++                    throw "无法确定全屏启动的 App。"
++                }
++                try LCBuiltInJIT.stageFullScreenLaunch(app: selected, container: folder, script: self.jitLaunchScriptJs)
++                UserDefaults.standard.set(selected, forKey: "selected")
 +                UserDefaults.standard.set(folder, forKey: "selectedContainer")
 +                UserDefaults.standard.set(urlStr, forKey: "launchAppUrlScheme")
-+                UserDefaults.standard.set(true, forKey: waitKey)
-+                LCUtils.launchMultitaskGuestApp(appInfo.displayName()) { pidNumber, error in
-+                    if let error { continuation.resume(throwing: error); return }
-+                    guard let pid = pidNumber?.intValue else { continuation.resume(throwing: "无法获取容器进程 PID。"); return }
-+                    Task { @MainActor in
-+                        do {
-+                            try await LCBuiltInJIT.enable(pid: pid, script: self.jitLaunchScriptJs)
-+                            continuation.resume()
-+                        } catch { continuation.resume(throwing: error) }
-+                    }
-+                }
-+                }
++                UserDefaults.standard.set(false, forKey: "LCOpenSideStore")
++                UserDefaults.standard.synchronize()
++                // This restarts the host. Only its NEW process may become the
++                // JIT target; the bootstrap consumes the one-shot handoff.
++                LCSharedUtils.launchToGuestApp(withClassicMode: classicMode)
 +            }
 +        } else if jitNeeded {
              if multitask, #available(iOS 17.4, *) {
@@ -147,6 +225,29 @@ index 94eeef1837c9af9e47518d50bb0d211831f5c5e7..f2f40b1532243a4b9789beb2a7da51d4
          await MainActor.run {
              let encodedData = script?.addingPercentEncoding(withAllowedCharacters: .urlQueryAllowed)
                  
+diff --git a/LiveContainerSwiftUI/Views/LCTabView.swift b/LiveContainerSwiftUI/Views/LCTabView.swift
+index af4c70e2da12f1da8b461ab25ca7052a03771579..924c7b05bf0f1eb0b6b05f6237975330dcaae3cc 100644
+--- a/LiveContainerSwiftUI/Views/LCTabView.swift
++++ b/LiveContainerSwiftUI/Views/LCTabView.swift
+@@ -158,6 +158,18 @@ struct LCTabView: View {
+     
+     func checkLastLaunchError() {
+         var errorStr = UserDefaults.standard.string(forKey: "error")
++        let reportURL = URL(fileURLWithPath: ProcessInfo.processInfo.environment["LC_HOME_PATH"] ?? NSHomeDirectory())
++            .appendingPathComponent("Library/SSBuiltInJITLaunchStatus.plist")
++        if let report = NSDictionary(contentsOf: reportURL) as? [String: Any] {
++            if errorStr == nil {
++                if let failure = report["error"] as? String {
++                    errorStr = "内置 JIT：\n" + failure
++                } else if report["state"] as? String != "complete" {
++                    errorStr = "上次内置 JIT 尚未收到脚本完成结果，不能确认 JIT 成功。若启动被系统终止，请检查连接后重试。"
++                }
++            }
++            try? FileManager.default.removeItem(at: reportURL)
++        }
+         
+         if errorStr == nil && UserDefaults.standard.bool(forKey: "SigningInProgress") {
+             errorStr = "lc.signer.crashDuringSignErr".loc
 diff --git a/LiveContainerSwiftUI/Views/Settings/LCSettingsView.swift b/LiveContainerSwiftUI/Views/Settings/LCSettingsView.swift
 index 4b8483f5677bf1aa368bade013dc821f4fc6d5b9..f055d4d5ceec331d35b07a4df7e6fbb89ac853a7 100644
 --- a/LiveContainerSwiftUI/Views/Settings/LCSettingsView.swift
@@ -174,10 +275,10 @@ index 4b8483f5677bf1aa368bade013dc821f4fc6d5b9..f055d4d5ceec331d35b07a4df7e6fbb8
                  
                  Section {
 diff --git a/LiveProcess/main.m b/LiveProcess/main.m
-index c376fcd88c001235a9d2f30569eb908a388d0071..804db833ab9da0c0cb94af16af2f33307c8723fc 100644
+index c376fcd88c001235a9d2f30569eb908a388d0071..bf768951f0a2c18c28d577ebcade13e7f6516608 100644
 --- a/LiveProcess/main.m
 +++ b/LiveProcess/main.m
-@@ -46,15 +46,24 @@ int LiveProcessMain(int argc, char *argv[]) {
+@@ -46,11 +46,19 @@ int LiveProcessMain(int argc, char *argv[]) {
      NSString *customPayloadDylib = appInfo[@"customPayloadDylib"];
      if(customPayloadDylib) {
          void *handle = dlopen(customPayloadDylib.fileSystemRepresentation, RTLD_LAZY);
@@ -198,25 +299,3 @@ index c376fcd88c001235a9d2f30569eb908a388d0071..804db833ab9da0c0cb94af16af2f3330
          return payloadEntry(argc, argv, _envp, _apple);
      }
      
-     NSLog(@"Retrieved app info: %@", appInfo);
-+    if ([appInfo[@"SSBuiltInJITAwait"] boolValue]) setenv("LC_BUILTIN_JIT_AWAIT", "1", 1);
-     // Set LiveContainer's home path
-     setenv("LP_HOME_PATH", getenv("HOME"), 1);
-     const char *overrideHomePath = [appInfo[@"lcHomePath"] fileSystemRepresentation];
-diff --git a/MultitaskSupport/AppSceneViewController.m b/MultitaskSupport/AppSceneViewController.m
-index 37a61376f911f2821851f0d9bee559e5dae935a6..62bbf901b1c821f575bd288adf4099b71fc45182 100644
---- a/MultitaskSupport/AppSceneViewController.m
-+++ b/MultitaskSupport/AppSceneViewController.m
-@@ -90,6 +90,12 @@ - (instancetype)initWithBundleId:(NSString*)bundleId dataUUID:(NSString*)dataUUI
-             [bookmarks addObject:[tweaksURL bookmarkDataWithOptions:(1<<11) includingResourceValuesForKeys:0 relativeToURL:0 error:0]];
-         }
-     }
-+    NSString *waitKey = [@"SSBuiltInJITAwait." stringByAppendingString:dataUUID ?: @""];
-+    if ([NSUserDefaults.lcSharedDefaults integerForKey:@"LCJITEnablerType"] == 7 &&
-+        [NSUserDefaults.lcUserDefaults boolForKey:waitKey]) {
-+        userInfo[@"SSBuiltInJITAwait"] = @YES;
-+        [NSUserDefaults.lcUserDefaults removeObjectForKey:waitKey];
-+    }
-     item.userInfo = userInfo;
-     
-     __weak typeof(self) weakSelf = self;

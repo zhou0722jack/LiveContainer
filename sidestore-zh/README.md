@@ -52,6 +52,7 @@ GitHub Fork 的定时工作流需要先启用，并且仅在默认分支运行�
 
 已加入 [StikDebug JIT 与配对管理](custom/StikDebug/README.md)实验入口，使用按需加载的 StikJIT 核心。
 提供长按 App 启用 JIT、容器 App 搜索，以及 LiveContainer 的“内置 JIT”工具选项。
+内置 JIT 容器改走普通全屏主进程启动：重启后由辅助进程为新主进程开启 JIT，不创建多任务小窗；真机验证待完成。
 容器调试复用既有 LiveProcess 的独立辅助实例，不增加 VPN、应用扩展或 App ID；仍需外置 LocalDevVPN。
 极简版已停用，保留历史提交与附件，后续只维护本普通版工作流。
 

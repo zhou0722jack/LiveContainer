@@ -17,6 +17,18 @@ final class LCBuiltInJIT: NSObject {
     }
     static func endContainerLaunch() { shared.containerLaunchInProgress = false }
 
+    static func stageFullScreenLaunch(app: String, container: String, script: String?) throws {
+        guard !app.isEmpty, !container.isEmpty else { throw error("全屏启动目标为空。") }
+        var handoff: [String: Any] = ["app": app, "container": container,
+            "created": Date(), "originPID": Int(getpid())]
+        if let script, !script.isEmpty {
+            guard let data = Data(base64Encoded: script), data.count <= 1024 * 1024,
+                  String(data: data, encoding: .utf8) != nil else { throw error("容器 JIT 脚本格式无效。") }
+            handoff["scriptData"] = script
+        }
+        UserDefaults.standard.set(handoff, forKey: "SSBuiltInJITFullScreenLaunch")
+    }
+
     static func prepare(progress: ((String) -> Void)? = nil) async throws {
         try await shared.perform(operation: "prepare", pid: nil, script: nil, progress: progress)
     }
