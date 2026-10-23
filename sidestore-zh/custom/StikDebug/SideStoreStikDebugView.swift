@@ -46,7 +46,7 @@ private final class StikDebugModel: NSObject, ObservableObject {
             }
             let pairing = pairingURL()
             if operation != "reset", !FileManager.default.isReadableFile(atPath: pairing.path) {
-                throw failure("请先在配对文件管理中导入或生成有效配对文件。")
+                throw failure("此入口需要 Remote Pairing（RPPairing）文件。请先导入对应文件，或在支持的系统上使用无线配对；旧 Lockdown 文件不能替代它。")
             }
             let connection = ConnectionConfig.shared
             let address = connection.overrideTunnelPeerIp.isEmpty ? (connection.tunnelPeerIp ?? "10.7.0.1") : connection.overrideTunnelPeerIp
@@ -70,10 +70,9 @@ private final class StikDebugModel: NSObject, ObservableObject {
     }
 
     func pairingURL() -> URL {
-        let manager = PairingFileManager.shared
-        if let preferred = manager.preferredProtocol, manager.hasPairingFile(for: preferred) { return manager.pairingFileURL(for: preferred) }
-        if manager.hasPairingFile(for: .rppairing) { return manager.pairingFileURL(for: .rppairing) }
-        return manager.pairingFileURL(for: .lockdown)
+        // StikJIT opens an RpPairingFileHandle; never feed it the signer's
+        // preferred Lockdown file or silently change SideStore's protocol.
+        PairingFileManager.shared.pairingFileURL(for: .rppairing)
     }
 
     @objc func progress(_ text: String) {
@@ -123,7 +122,7 @@ private struct StikDebugToolsView: View {
                 NavigationLink("配对文件管理", destination: PairingFileManagementView())
                 if #available(iOS 26.0, *) { NavigationLink("无线配对", destination: WirelessPairView()) }
                 NavigationLink("连接配置", destination: ConnectionConfigView())
-                Text("使用文件：" + model.pairingURL().lastPathComponent).font(.footnote)
+                Text("需要 Remote Pairing：" + model.pairingURL().lastPathComponent).font(.footnote)
             }
             .disabled(model.busy)
             Section(header: Text("JIT 准备")) {

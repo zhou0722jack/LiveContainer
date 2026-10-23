@@ -15,7 +15,9 @@
 
 ## 必要条件和边界
 
-使用外置 LocalDevVPN、有效配对文件、开发者模式和带 `get-task-allow` 的目标 App。
+使用外置 LocalDevVPN、有效 Remote Pairing（RPPairing）文件、开发者模式和带 `get-task-allow` 的目标 App。
+本入口读取 SideStore 的 `PairingFile_RemoteRP.plist`，旧 Lockdown 文件不能替代它；
+不会修改侧载/刷新正在使用的配对协议。iOS 26 可在无线配对页生成，其他系统需先导入对应文件。
 此集成不增加 VPN 权限、不增加应用扩展、不修改主 App 及原有扩展 ID。
 独立动态 framework 的标识不是额外注册的应用 App ID。
 
