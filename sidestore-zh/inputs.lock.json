@@ -2,7 +2,8 @@
   "schema": 1,
   "sources": {
     "SideStore": {"url": "https://github.com/SideStore/SideStore.git", "ref": "refs/heads/develop", "commit": "d97ec133719d79916675bdaf722b82a8d091d545"},
-    "LiveContainer": {"url": "https://github.com/LiveContainer/LiveContainer.git", "ref": "refs/heads/main", "commit": "4dbe0f9a626de801184a42c0be8d2cb105058e3d"},
+    "LiveContainer": {"url": "https://github.com/LiveContainer/LiveContainer.git", "ref": "refs/heads/main", "commit": "9108ae624ea001f7d7696d48407f890b48fa2653", "patch_bases": ["4dbe0f9a626de801184a42c0be8d2cb105058e3d"]},
+    "StikJIT": {"url": "https://github.com/StikDebug/StikJIT.git", "commit": "32287268fa5824f9edce4cb359f5833ce0cf7b00"},
     "dylibify": {"url": "https://github.com/LiveContainer/dylibify.git", "commit": "5daf713df9fb07724510490c88aa8e00061be14a"}
   },
   "files": {

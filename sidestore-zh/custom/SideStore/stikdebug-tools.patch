@@ -1,0 +1,24 @@
+diff --git a/SideStore/Views/Settings/Diagnostics/ExperimentalFeaturesView.swift b/SideStore/Views/Settings/Diagnostics/ExperimentalFeaturesView.swift
+index 362f06c74483a1fcea40e9665086898c953c8d44..1dc7c55e0a9bbe038d4f0b807a0e67ab16068d75 100644
+--- a/SideStore/Views/Settings/Diagnostics/ExperimentalFeaturesView.swift
++++ b/SideStore/Views/Settings/Diagnostics/ExperimentalFeaturesView.swift
+@@ -19,6 +19,19 @@ struct ExperimentalFeaturesView: View {
+     var body: some View {
+         ScrollView {
+             VStack(alignment: .leading, spacing: 24) {
++                NavigationLink(destination: SideStoreStikDebugView()) {
++                    HStack {
++                        Image(systemName: "ladybug")
++                        Text("StikDebug：JIT 与配对管理")
++                            .font(.system(size: 17, weight: .bold))
++                        Spacer()
++                        Image(systemName: "chevron.right")
++                    }
++                    .foregroundColor(.white)
++                    .padding(16)
++                    .background(Color.settingsRowBackground)
++                    .cornerRadius(14)
++                }
+                 // Section 1: STANDALONE FEATURES
+                 VStack(alignment: .leading, spacing: 8) {
+                     Text("独立功能")

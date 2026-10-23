@@ -1,4 +1,4 @@
 {
   "LiveContainer": [],
-  "SideStore": []
+  "SideStore": ["SideStore/stikdebug-tools.patch"]
 }

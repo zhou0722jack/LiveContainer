@@ -63,21 +63,22 @@ with zipfile.ZipFile(ipa) as package, zipfile.ZipFile(WORK / 'lc-nightly.ipa') a
     check('host_main_binary_unchanged', package.read(top + 'LiveContainer') == old.read(top + 'LiveContainer'))
     check('integration_framework_unchanged', package.read(top + 'Frameworks/SideStoreSupport.framework/SideStoreSupport')
           == old.read(top + 'Frameworks/SideStoreSupport.framework/SideStoreSupport'))
-    variant = json.loads((ROOT / 'candidate.json').read_text()).get('variant', 'standard')
-    if variant == 'minimal':
-        check('minimal_display_name', host_info.get('CFBundleDisplayName') == '极简' and host_info.get('LCMinimalVariant') is True)
-        check('minimal_host_identifier_unchanged', host_info['CFBundleIdentifier'] == 'com.kdt.livecontainer')
-        # Swift can encode short strings in instructions rather than a string section.
-        # Confirm the complete source menu plus stable, long compiled UI/routing strings.
-        minimal_home = (WORK / 'LiveContainer/LiveContainerSwiftUI/Views/LCTabView.swift').read_text()
-        check('minimal_four_actions_in_source', all(text in minimal_home
-              for text in ['侧载 App', '刷新 App', '容器安装 App', '登录账号']))
-        minimal_ui_binary = package.read(top + 'Frameworks/LiveContainerSwiftUI.framework/LiveContainerSwiftUI')
-        check('minimal_container_action_compiled', '容器安装 App'.encode() in minimal_ui_binary)
-        check('minimal_sidestore_routing_compiled', b'sidestore://minimal/' in minimal_ui_binary)
-        check('minimal_sideload_controller_compiled', b'MinimalSideStoreViewController' in package.read(guest + 'SideStore'))
-        check('minimal_return_bridge_compiled', b'LCSideStoreReturnToMinimalHome' in package.read(top + 'Frameworks/SideStoreSupport.framework/SideStoreSupport'))
-        check('minimal_no_builtin_vpn', not any('LocalVPN.appex/' in name for name in names))
+    core = top + 'Frameworks/SideStoreStikDebugCore.framework/'
+    core_info = plistlib.loads(package.read(core + 'Info.plist'))
+    core_binary = package.read(core + 'SideStoreStikDebugCore')
+    check('stikdebug_core_dylib', macho(core_binary)[0][3] == 6)
+    check('stikdebug_core_ios174', core_info.get('MinimumOSVersion') == '17.4')
+    check('stikdebug_core_class', b'SSStikDebugCore' in core_binary)
+    check('stikdebug_universal_script', len(package.read(core + 'universal.js')) > 100)
+    check('stikdebug_licenses', b'AFFERO GENERAL PUBLIC LICENSE' in package.read(top + 'LICENSE-StikDebug.txt')
+          and b'Mozilla Public License' in package.read(core + 'LICENSE-StikJIT.txt'))
+    check('stikdebug_source_provenance', b'github.com/StikDebug/StikJIT/tree/' in package.read(top + 'StikDebug-SOURCE.txt'))
+    check('stikdebug_ui_compiled', b'Frameworks/SideStoreStikDebugCore.framework/SideStoreStikDebugCore' in package.read(guest + 'SideStore'))
+    check('stikdebug_host_identifier_unchanged', host_info['CFBundleIdentifier'] == 'com.kdt.livecontainer')
+    check('stikdebug_no_new_extensions', {name for name in names if name.endswith('.appex/Info.plist')} == {
+        top + 'PlugIns/' + name + '.appex/Info.plist' for name in ['LiveProcess', 'LiveWidgetExtension', 'ShareExtension', 'LaunchAppExtension']})
+    check('stikdebug_no_builtin_vpn', not any('LocalVPN.appex/' in name for name in names))
+    check('stikdebug_not_strongly_linked', not any(b'SideStoreStikDebugCore.framework' in data for _, data in macho(package.read(guest + 'SideStore'))[1]))
     for name in ['Intents.intentdefinition', 'ViewApp.intentdefinition']:
         check('intent_definition_matches_guest:' + name,
               package.read(top + name) == new.read('Payload/SideStore.app/' + name))
@@ -147,7 +148,7 @@ with zipfile.ZipFile(ipa) as package, zipfile.ZipFile(WORK / 'lc-nightly.ipa') a
                 'PlugIns/LiveWidgetExtension.appex/LiveWidgetExtension']:
         check('executable_mode:' + rel, bool((package.getinfo(top + rel).external_attr >> 16) & stat.S_IXUSR))
 
-for rel in ['Frameworks/SideStoreApp.framework/SideStore', 'PlugIns/LiveWidgetExtension.appex']:
+for rel in ['Frameworks/SideStoreApp.framework/SideStore', 'PlugIns/LiveWidgetExtension.appex', 'Frameworks/SideStoreStikDebugCore.framework']:
     result = subprocess.run(['codesign', '--verify', '--strict', '--verbose=2',
                              str(WORK / args.stage / 'Payload/LiveContainer.app' / rel)], capture_output=True, text=True)
     check('adhoc_signature:' + rel, result.returncode == 0)
@@ -166,6 +167,7 @@ report = {
     'device_installation': 'UNRUN',
     'apple_id_login_and_2fa': 'UNRUN',
     'refresh_and_guest_launch': 'UNRUN',
+    'stikdebug_device_pairing_ddi_jit': 'UNRUN',
     'distribution_signing': 'Requires iloader to re-sign with user account. Ad-hoc signatures are not device installation authorization.'
 }
 (OUT / args.report).write_text(json.dumps(report, indent=2) + '\n')

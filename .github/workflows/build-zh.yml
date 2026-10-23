@@ -29,7 +29,7 @@ jobs:
       run:
         shell: bash
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
         with:
           persist-credentials: false
       - name: Check pipeline behavior
@@ -60,6 +60,9 @@ jobs:
       - name: Prepare pinned inputs and translation
         if: steps.check.outputs.should_build == 'true'
         run: python3 -u sidestore-zh/build.py prepare
+      - name: Check StikDebug settings against selected SDK
+        if: steps.check.outputs.should_build == 'true'
+        run: python3 sidestore-zh/scripts/typecheck_stikdebug.py --source sidestore-zh/.build/work/SideStore
       - name: Compile both projects from source
         if: steps.check.outputs.should_build == 'true'
         run: python3 -u sidestore-zh/build.py build
@@ -68,7 +71,7 @@ jobs:
         run: python3 -u sidestore-zh/build.py package
       - name: Upload IPA and verification
         if: steps.check.outputs.should_build == 'true'
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: LiveContainer-SideStore-zh-Hans
           path: sidestore-zh/.build/outputs/*
@@ -85,7 +88,7 @@ jobs:
           key: zh-state-${{ github.ref_name }}-${{ github.run_id }}-${{ github.run_attempt }}
       - name: Upload diagnostic logs
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: zh-build-logs
           path: |

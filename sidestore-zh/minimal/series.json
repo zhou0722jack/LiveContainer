@@ -1,4 +1,0 @@
-{
-  "LiveContainer": ["LiveContainer/minimal-ui.patch"],
-  "SideStore": ["SideStore/minimal-ui.patch"]
-}

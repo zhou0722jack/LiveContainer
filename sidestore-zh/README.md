@@ -5,9 +5,6 @@ Fork [LiveContainer/LiveContainer](https://github.com/LiveContainer/LiveContaine
 加入你的 Fork。主仓库负责运行构建；两个应用源码在每次构建中分别获取。
 以后维护自定义功能只需改补丁，不必反复手动合并两个完整项目。
 
-另有独立的[极简版](minimal/README.md)：只保留侧载、刷新、容器安装和账号登录入口。
-普通版工作流和附件继续保留；极简版使用独立工作流，沿用相同 App ID，两版不能同时安装。
-
 ## 启用
 
 1. GitHub 上 Fork LiveContainer/LiveContainer，保留默认分支 `main` 即可。
@@ -18,7 +15,7 @@ Fork [LiveContainer/LiveContainer](https://github.com/LiveContainer/LiveContaine
 3. 进入你的 Fork → Actions，启用工作流。建议禁用 Fork 自带的旧 `Xcode - Build`
    和更新应用源工作流，避免生成另一套上游原包或触发原有发布流程。
 4. 选择 **Build Chinese LiveContainer + SideStore → Run workflow**。
-   默认跟踪上游最新源码；`pinned` 勾选后使用 2026-10-17 核对的历史提交。
+   默认跟踪上游最新源码；`pinned` 勾选后使用 2026-10-23 核对的固定提交。
 5. 成功后，在该次运行底部下载 **LiveContainer-SideStore-zh-Hans** 附件，
    解压得到 `LiveContainer+SideStore-zh-Hans.ipa`、校验报告和构建记录。
    它仍需使用 iloader 等工具以自己的账号签名安装，并保留应用扩展。
@@ -53,7 +50,11 @@ GitHub Fork 的定时工作流需要先启用，并且仅在默认分支运行�
 修改内置汉化补丁、中文资源表或历史 `Package.resolved` 后，需要同步更新
 `inputs.lock.json` 中 `files` 的 SHA-256；自定义功能补丁不需要修改这组摘要。
 
-自定义功能入口是 [custom/series.json](custom/series.json)，两个列表目前为空。
+已加入 [StikDebug JIT 与配对管理](custom/StikDebug/README.md)实验入口，使用按需加载的 StikJIT 核心。
+不增加 VPN、应用扩展或 App ID；仍需外置 LocalDevVPN，且不能调试当前二合一进程自身。
+极简版已停用，保留历史提交与附件，后续只维护本普通版工作流。
+
+自定义功能入口是 [custom/series.json](custom/series.json)，SideStore 列表包含 StikDebug 实验入口。
 以后分别向 `LiveContainer`、`SideStore` 的列表添加补丁。详见
 [自定义补丁说明](custom/README.md)。流程顺序为：获取上游 → 应用汉化 →
 应用自己的功能 → 分别编译 → 整合与静态校验。不会在构建失败时替换现有成果。

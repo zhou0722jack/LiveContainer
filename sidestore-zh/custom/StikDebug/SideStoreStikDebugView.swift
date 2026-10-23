@@ -1,0 +1,176 @@
+import SwiftUI
+import Darwin
+
+struct SideStoreStikDebugView: View {
+    var body: some View {
+        Group {
+            if #available(iOS 17.4, *) { StikDebugToolsView() }
+            else { Text("StikDebug JIT 需要 iOS 17.4 或更新版本。请继续使用原有侧载和刷新功能。") }
+        }
+        .navigationTitle("StikDebug · 实验性")
+    }
+}
+
+@available(iOS 17.4, *)
+@MainActor
+private final class StikDebugModel: NSObject, ObservableObject {
+    @Published var busy = false
+    @Published var status = "尚未准备"
+    @Published var error: String?
+    @Published var apps: [[String: String]] = []
+    @Published var logs: [String] = []
+    private var library: UnsafeMutableRawPointer?
+    private var core: NSObject?
+    private var backgroundTask = UIBackgroundTaskIdentifier.invalid
+
+    func invalidate() {
+        guard !busy else { return }
+        status = "配对或连接配置可能已变化，请重新准备。"
+        apps = []
+    }
+
+    func run(_ operation: String, bundleID: String? = nil, forceScript: Bool = false) {
+        guard !busy else { return }
+        error = nil
+        do {
+            if core == nil {
+                let path = Bundle.Info.activeBundleURL.appendingPathComponent("Frameworks/SideStoreStikDebugCore.framework/SideStoreStikDebugCore").path
+                library = dlopen(path, RTLD_NOW | RTLD_LOCAL)
+                guard library != nil else {
+                    throw failure("无法加载内置 StikJIT 核心：" + (dlerror().map { String(cString: $0) } ?? "未知错误"))
+                }
+                guard let type = NSClassFromString("SSStikDebugCore") as? NSObject.Type,
+                      let shared = type.perform(NSSelectorFromString("shared"))?.takeUnretainedValue() as? NSObject,
+                      shared.responds(to: NSSelectorFromString("execute:")) else { throw failure("StikJIT 核心接口不完整，请重新安装本次构建。") }
+                core = shared
+            }
+            let pairing = pairingURL()
+            if operation != "reset", !FileManager.default.isReadableFile(atPath: pairing.path) {
+                throw failure("请先在配对文件管理中导入或生成有效配对文件。")
+            }
+            let connection = ConnectionConfig.shared
+            let address = connection.overrideTunnelPeerIp.isEmpty ? (connection.tunnelPeerIp ?? "10.7.0.1") : connection.overrideTunnelPeerIp
+            let port = UserDefaults.standard.remotePairingPortOverride
+            let effectivePort = port > 0 ? port : Int(remotePairingPortCache)
+            var request: [String: Any] = ["operation": operation, "reply": self,
+                "pairingPath": pairing.path, "address": address, "port": effectivePort,
+                "forceScript": forceScript, "excludedBundleIDs": [Bundle.Info.activeBundleIdentifier, "com.SideStore.SideStore"]]
+            if let bundleID { request["bundleID"] = bundleID }
+            busy = true
+            status = "正在处理…"
+            logs = []
+            if operation == "reset" { apps = [] }
+            backgroundTask = UIApplication.shared.beginBackgroundTask(withName: "StikDebug JIT") { [weak self] in
+                guard let self else { return }
+                self.progress("系统后台执行时间已到，请返回二合一 App。调试操作尚未报告完成。")
+                self.endBackgroundTask()
+            }
+            _ = core?.perform(NSSelectorFromString("execute:"), with: request as NSDictionary)
+        } catch { self.error = error.localizedDescription; status = "未完成" }
+    }
+
+    func pairingURL() -> URL {
+        let manager = PairingFileManager.shared
+        if let preferred = manager.preferredProtocol, manager.hasPairingFile(for: preferred) { return manager.pairingFileURL(for: preferred) }
+        if manager.hasPairingFile(for: .rppairing) { return manager.pairingFileURL(for: .rppairing) }
+        return manager.pairingFileURL(for: .lockdown)
+    }
+
+    @objc func progress(_ text: String) {
+        status = text
+        logs.append(text)
+        if logs.count > 120 { logs.removeFirst(logs.count - 120) }
+    }
+
+    @objc func complete(_ reply: NSDictionary) {
+        busy = false
+        endBackgroundTask()
+        if let message = reply["error"] as? String {
+            error = message
+            status = "未完成"
+        } else {
+            status = reply["message"] as? String ?? "处理完成"
+            if let apps = reply["apps"] as? [[String: String]] { self.apps = apps }
+        }
+    }
+
+    private func endBackgroundTask() {
+        guard backgroundTask != .invalid else { return }
+        UIApplication.shared.endBackgroundTask(backgroundTask)
+        backgroundTask = .invalid
+    }
+
+    private func failure(_ text: String) -> NSError {
+        NSError(domain: "SideStore.StikDebug", code: 1, userInfo: [NSLocalizedDescriptionKey: text])
+    }
+}
+
+@available(iOS 17.4, *)
+private struct StikDebugToolsView: View {
+    @StateObject private var model = StikDebugModel()
+    @AppStorage("SSStikDebugForceScript") private var forceScript = false
+    @State private var selectedApp: StikTarget?
+    @State private var confirmReset = false
+
+    var body: some View {
+        SwiftUI.Form {
+            Section(header: Text("使用条件"), footer: Text("目标需有 get-task-allow，并启用开发者模式。iOS 26 的目标 App 还需支持 universal.js 协议；普通调试附加不保证 JIT 可用。此入口用于其他侧载 App，不能给当前二合一进程自身启用 JIT。")) {
+                Text("iOS 17.4+ · 先连接外置 LocalDevVPN")
+                Text("内置 StikJIT，不需要另装 StikDebug，不新增 VPN 或应用扩展。")
+                    .font(.footnote).foregroundColor(.secondary)
+            }
+            Section(header: Text("配对与连接")) {
+                NavigationLink("配对文件管理", destination: PairingFileManagementView())
+                if #available(iOS 26.0, *) { NavigationLink("无线配对", destination: WirelessPairView()) }
+                NavigationLink("连接配置", destination: ConnectionConfigView())
+                Text("使用文件：" + model.pairingURL().lastPathComponent).font(.footnote)
+            }
+            .disabled(model.busy)
+            Section(header: Text("JIT 准备")) {
+                SwiftUI.Button("准备设备 / 挂载 DDI") { model.run("prepare") }
+                SwiftUI.Button("读取可调试 App") { model.run("list") }
+                Toggle("强制使用 universal 脚本", isOn: $forceScript)
+                Text(model.status).font(.footnote).textSelection(.enabled)
+                if model.busy { ProgressView() }
+                if let error = model.error { Text(error).foregroundColor(.red).textSelection(.enabled) }
+            }
+            .disabled(model.busy)
+            if !model.apps.isEmpty {
+                Section(header: Text("选择 App 启用 JIT"), footer: Text("只列出设备报告带有 get-task-allow 的 App。目标可能被切换到前台；若调试尚未结束，可返回本 App 查看进度。")) {
+                    ForEach(model.apps, id: \.self) { app in
+                        SwiftUI.Button {
+                            if let id = app["bundleID"] { selectedApp = StikTarget(id: id, name: app["name"] ?? id) }
+                        } label: {
+                            VStack(alignment: .leading, spacing: 4) {
+                                Text(app["name"] ?? "App")
+                                Text(app["bundleID"] ?? "").font(.caption).foregroundColor(.secondary)
+                            }
+                        }
+                    }
+                }.disabled(model.busy)
+            }
+            if !model.logs.isEmpty {
+                Section(header: Text("本次进度")) {
+                    Text(model.logs.joined(separator: "\n")).font(.caption.monospaced()).textSelection(.enabled)
+                }
+            }
+            Section(header: Text("恢复与来源"), footer: Text("此功能是非官方实验性集成，真实错误会显示在页面。重置只清理本功能的 DDI 缓存，不删除配对文件。")) {
+                SwiftUI.Button("重置开发者磁盘镜像缓存", role: .destructive) { confirmReset = true }.disabled(model.busy)
+                Link("StikDebug 源码 · AGPL-3.0", destination: URL(string: "https://github.com/StikDebug/StikDebug")!)
+                Link("StikJIT 核心与集成说明 · MPL-2.0", destination: URL(string: "https://github.com/StikDebug/StikJIT")!)
+            }
+        }
+        .onAppear { model.invalidate() }
+        .alert(item: $selectedApp) { target in
+            Alert(title: Text("为 \(target.name) 启用 JIT？"), message: Text("会启动目标并连接调试器。此过程不会为缺少权限或不兼容协议的 App 补充 JIT 支持。"), primaryButton: .default(Text("启用")) {
+                model.run("enable", bundleID: target.id, forceScript: forceScript)
+            }, secondaryButton: .cancel(Text("取消")))
+        }
+        .alert("重置 DDI 缓存？", isPresented: $confirmReset) {
+            SwiftUI.Button("重置", role: .destructive) { model.run("reset") }
+            SwiftUI.Button("取消", role: .cancel) { }
+        }
+    }
+}
+
+private struct StikTarget: Identifiable { let id: String; let name: String }

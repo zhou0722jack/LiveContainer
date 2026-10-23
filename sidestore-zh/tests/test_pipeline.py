@@ -17,28 +17,6 @@ spec.loader.exec_module(pipeline)
 
 
 class PipelineTests(unittest.TestCase):
-    def test_minimal_success_does_not_skip_standard_build(self):
-        with tempfile.TemporaryDirectory() as directory:
-            base = Path(directory)
-            recipe = base / 'recipe.txt'
-            recipe.write_text('shared recipe')
-            args = argparse.Namespace(pinned=True, force=False, variant='minimal')
-            with patch.object(pipeline, 'BASE', base), patch.object(pipeline, 'LOCK', {'sources': {}}), \
-                 patch.object(pipeline, 'recipe_files', lambda: [(recipe, 'recipe.txt')]), \
-                 patch.dict(os.environ, {'GITHUB_EVENT_NAME': 'schedule', 'GITHUB_OUTPUT': ''}), \
-                 contextlib.redirect_stdout(io.StringIO()):
-                pipeline.check(base / 'minimal-first', args)
-                state = pipeline.read_json(base / 'minimal-first/candidate.json')
-                (base / '.last-success/minimal').mkdir(parents=True)
-                pipeline.write_json(base / '.last-success/minimal/state.json', {'fingerprint': state['fingerprint']})
-                pipeline.check(base / 'minimal-same', args)
-                self.assertFalse(pipeline.read_json(base / 'minimal-same/candidate.json')['should_build'])
-                args.variant = 'standard'
-                pipeline.check(base / 'standard-first', args)
-                standard = pipeline.read_json(base / 'standard-first/candidate.json')
-                self.assertTrue(standard['should_build'])
-                self.assertNotEqual(standard['fingerprint'], state['fingerprint'])
-
     def test_schedule_skips_only_successful_unchanged_inputs(self):
         with tempfile.TemporaryDirectory() as directory:
             base = Path(directory)
