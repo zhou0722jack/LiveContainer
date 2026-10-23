@@ -9,6 +9,13 @@ final class LCBuiltInJIT: NSObject {
     private var continuation: CheckedContinuation<Void, Error>?
     private var logger: ((String) -> Void)?
     private var handle: UnsafeMutableRawPointer?
+    private var containerLaunchInProgress = false
+
+    static func beginContainerLaunch() throws {
+        guard !shared.containerLaunchInProgress else { throw error("已有容器正在准备内置 JIT，请等待完成。") }
+        shared.containerLaunchInProgress = true
+    }
+    static func endContainerLaunch() { shared.containerLaunchInProgress = false }
 
     static func prepare(progress: ((String) -> Void)? = nil) async throws {
         try await shared.perform(operation: "prepare", pid: nil, script: nil, progress: progress)
