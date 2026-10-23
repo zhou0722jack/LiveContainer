@@ -115,7 +115,7 @@ def validate_source(work, allow_generated=False):
     manifest = read_json(work / 'source-manifest.json')
     candidate = read_json(work.parent / 'candidate.json')
     if 'StikJIT' in candidate['sources']:
-        for name in ['SSStikDebugCore.swift', 'StikAppMetadataReader.swift']:
+        for name in ['SSStikDebugCore.swift', 'StikAppMetadataReader.swift', 'SSStikDebugBridge.h', 'SSStikDebugBridge.m']:
             require(digest(work / name) == candidate['recipe']['sidestore-zh/custom/StikDebug/' + name],
                     'StikDebug integration source changed: ' + name)
     for name, entry in read_json(work.parent / 'candidate.json')['sources'].items():
@@ -179,6 +179,10 @@ def prepare(root, args):
             apply_patch(work / name, patch, work / f'patch-{name}-{index}.log')
     shutil.copy2(BASE / 'custom/StikDebug/SSStikDebugCore.swift', work / 'SSStikDebugCore.swift')
     shutil.copy2(BASE / 'custom/StikDebug/StikAppMetadataReader.swift', work / 'StikAppMetadataReader.swift')
+    for name in ['SSStikDebugBridge.h', 'SSStikDebugBridge.m']:
+        shutil.copy2(BASE / 'custom/StikDebug' / name, work / name)
+    shutil.copy2(BASE / 'custom/StikDebug/LCBuiltInJIT.swift',
+                 work / 'LiveContainer/LiveContainerSwiftUI/Utilities/LCBuiltInJIT.swift')
     shutil.copy2(BASE / 'custom/StikDebug/SideStoreStikDebugView.swift',
                  source / 'SideStore/Views/Settings/Diagnostics/SideStoreStikDebugView.swift')
     manifest = {name: {'files': snapshot(work / name),

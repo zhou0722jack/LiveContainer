@@ -14,16 +14,19 @@ framework = work / 'stikdebug-products/SideStoreStikDebugCore.framework'
 assert not framework.exists(), 'Preserve the prior component build'
 framework.mkdir(parents=True)
 sdk = subprocess.check_output(['xcrun', '--sdk', 'iphoneos', '--show-sdk-path'], text=True).strip()
+bridge = work / 'SSStikDebugBridge.o'
+subprocess.run(['xcrun', '--sdk', 'iphoneos', 'clang', '-c', '-fobjc-arc', '-fmodules',
+    '-target', 'arm64-apple-ios17.4', '-isysroot', sdk, str(work / 'SSStikDebugBridge.m'), '-o', str(bridge)], check=True)
 command = ['xcrun', '--sdk', 'iphoneos', 'swiftc', '-emit-library', '-O', '-swift-version', '5', '-sdk', sdk,
            '-target', 'arm64-apple-ios17.4', '-module-name', 'SideStoreStikDebugCore',
-           '-I', str(source / 'idevice'), '-I', str(source / 'iokit'),
+           '-I', str(source / 'idevice'), '-I', str(source / 'iokit'), '-import-objc-header', str(work / 'SSStikDebugBridge.h'),
            '-L', str(source / 'idevice'), '-Xlinker', '-hidden-lidevice_ffi',
            '-Xlinker', '-dead_strip', '-Xlinker', '-install_name',
            '-Xlinker', '@rpath/SideStoreStikDebugCore.framework/SideStoreStikDebugCore']
 for name in ['Foundation', 'JavaScriptCore', 'Network', 'Security', 'CFNetwork', 'SystemConfiguration', 'IOKit']:
     command += ['-framework', name]
 command += [str(path) for path in sorted((source / 'Sources').glob('*.swift'))]
-command += [str(work / 'SSStikDebugCore.swift'), str(work / 'StikAppMetadataReader.swift'),
+command += [str(work / 'SSStikDebugCore.swift'), str(work / 'StikAppMetadataReader.swift'), str(bridge),
             '-o', str(framework / 'SideStoreStikDebugCore')]
 subprocess.run(command, check=True)
 for script in (source / 'Resources').glob('*.js'):

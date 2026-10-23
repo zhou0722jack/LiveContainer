@@ -14,3 +14,7 @@ ui = args.source / 'SideStore/Views/Settings/Diagnostics/SideStoreStikDebugView.
 command += [str(ui), str(args.source / 'SideStore/Views/Settings/Diagnostics/ExperimentalFeaturesView.swift'),
             str(args.source / 'AltStore/Components/Button.swift'), str(root / 'tests/StikDebugUIStubs.swift')]
 subprocess.run(command, check=True)
+host = root / 'custom/StikDebug/LCBuiltInJIT.swift'
+subprocess.run(['xcrun', '--sdk', 'iphoneos', 'swiftc', '-typecheck', '-swift-version', '5',
+               '-sdk', sdk, '-target', 'arm64-apple-ios15.0', '-import-objc-header',
+               str(root / 'tests/LCBuiltInJITSDK.h'), str(host)], check=True)

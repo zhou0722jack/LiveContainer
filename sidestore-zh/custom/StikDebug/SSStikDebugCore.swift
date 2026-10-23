@@ -11,6 +11,19 @@ public final class SSStikDebugCore: NSObject {
     private let queue = DispatchQueue(label: "SideStore.StikDebug.serial", qos: .userInitiated)
     @objc public class func shared() -> NSObject { instance }
 
+    @objc public func executeWithHelper(_ request: NSDictionary) {
+        guard let values = request as? [String: Any] else { return }
+        SSStikDebugExecuteInHelper(values)
+    }
+    @objc public func containerApps(_ request: NSDictionary) -> NSDictionary {
+        guard let values = request as? [String: Any] else { return ["error": "容器请求格式无效。"] }
+        return SSStikDebugContainerApps(values) as NSDictionary
+    }
+    @objc public func launchContainer(_ request: NSDictionary) -> NSDictionary {
+        guard let values = request as? [String: Any] else { return ["error": "容器请求格式无效。"] }
+        return SSStikDebugLaunchContainer(values) as NSDictionary
+    }
+
     @objc public func execute(_ request: NSDictionary) {
         guard let reply = request["reply"] as? NSObject else { return }
         queue.async {
@@ -28,6 +41,12 @@ public final class SSStikDebugCore: NSObject {
                 if operation == "reset" {
                     stage = "重置 DDI 缓存"
                     try StikJIT.resetCachedDDI(at: paths)
+                    if request["hostBundlePath"] is String {
+                        // The desktop cache and helper cache belong to different
+                        // processes. Reset the second cache before reporting done.
+                        SSStikDebugExecuteInHelper(request as? [String: Any] ?? [:])
+                        return
+                    }
                     complete(["message": "DDI 缓存已重置，下次准备时重新下载。"])
                     return
                 }
@@ -63,6 +82,24 @@ public final class SSStikDebugCore: NSObject {
                     stage = "准备设备 / 挂载 DDI"
                     let state = try prepare()
                     complete(["message": "设备准备完成；TXM/SPTM：" + (state.isTXMPresent.map { $0 ? "存在" : "不存在" } ?? "未知")])
+                    return
+                }
+                if operation == "enablePID" {
+                    stage = "验证容器进程"
+                    guard let value = request["targetPID"] as? NSNumber,
+                          value.int64Value > 0, value.int64Value <= Int64(Int32.max),
+                          value.int32Value != getpid() else { throw Self.failure("容器目标 PID 无效或与辅助进程相同。") }
+                    let script: StikJIT.Script
+                    if let encoded = request["scriptData"] as? String, !encoded.isEmpty {
+                        guard let data = Data(base64Encoded: encoded), data.count <= 1024 * 1024,
+                              String(data: data, encoding: .utf8) != nil else { throw Self.failure("容器 JIT 脚本格式无效。") }
+                        script = .customBase64(encoded)
+                    } else { script = .universal }
+                    stage = "为容器进程启用 JIT"
+                    try StikJIT.enableJIT(targetPID: value.int32Value, pairingFile: pairing, ddiPaths: paths,
+                        configuration: config, script: script, forceScript: false,
+                        preparationProgress: reportStage, progress: progress)
+                    complete(["message": "容器 JIT 调试流程已完成。"])
                     return
                 }
                 guard operation == "list" || operation == "enable" else { throw Self.failure("不支持的调试操作。") }

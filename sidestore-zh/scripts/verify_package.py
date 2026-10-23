@@ -69,6 +69,12 @@ with zipfile.ZipFile(ipa) as package, zipfile.ZipFile(WORK / 'lc-nightly.ipa') a
     check('stikdebug_core_dylib', macho(core_binary)[0][3] == 6)
     check('stikdebug_core_ios174', core_info.get('MinimumOSVersion') == '17.4')
     check('stikdebug_core_class', b'SSStikDebugCore' in core_binary)
+    check('stikdebug_helper_entry', b'SSStikDebugHelperMain' in core_binary)
+    check('stikdebug_container_handoff', b'SSBuiltInJITPendingContainer' in core_binary)
+    ui_binary = package.read(top + 'Frameworks/LiveContainerSwiftUI.framework/LiveContainerSwiftUI')
+    check('livecontainer_builtin_jit_coordinator', b'LCBuiltInJIT' in ui_binary)
+    check('livecontainer_builtin_jit_handoff', b'SSBuiltInJITPendingContainer' in ui_binary)
+    check('liveprocess_builtin_jit_wait', b'LC_BUILTIN_JIT_AWAIT' in package.read(top + 'PlugIns/LiveProcess.appex/LiveProcess'))
     check('stikdebug_universal_script', len(package.read(core + 'universal.js')) > 100)
     check('stikdebug_licenses', b'AFFERO GENERAL PUBLIC LICENSE' in package.read(top + 'LICENSE-StikDebug.txt')
           and b'Mozilla Public License' in package.read(core + 'LICENSE-StikJIT.txt'))
@@ -168,6 +174,7 @@ report = {
     'apple_id_login_and_2fa': 'UNRUN',
     'refresh_and_guest_launch': 'UNRUN',
     'stikdebug_device_pairing_ddi_jit': 'UNRUN',
+    'stikdebug_container_search_and_helper_jit': 'UNRUN',
     'distribution_signing': 'Requires iloader to re-sign with user account. Ad-hoc signatures are not device installation authorization.'
 }
 (OUT / args.report).write_text(json.dumps(report, indent=2) + '\n')

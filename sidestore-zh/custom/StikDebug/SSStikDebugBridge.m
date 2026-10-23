@@ -1,0 +1,230 @@
+#import "SSStikDebugBridge.h"
+#import <CoreFoundation/CoreFoundation.h>
+#import <objc/message.h>
+#import <dlfcn.h>
+#import <signal.h>
+
+// Use LiveContainer's existing, multiple-instance LiveProcess extension.
+@interface NSExtension : NSObject
++ (instancetype)extensionWithIdentifier:(NSString *)identifier error:(NSError **)error;
+- (void)beginExtensionRequestWithInputItems:(NSArray *)items completion:(void (^)(NSUUID *))completion;
+- (void)setRequestCancellationBlock:(void (^)(NSUUID *, NSError *))block;
+- (void)setRequestInterruptionBlock:(void (^)(NSUUID *))block;
+- (void)_kill:(int)signal;
+@end
+
+static NSDictionary *SSFailure(NSString *message) { return @{ @"error": message ?: @"内置 JIT 操作失败，未提供错误详情。" }; }
+static id SSClassValue(NSString *name, NSString *selector) {
+    Class type = NSClassFromString(name);
+    return type && [type respondsToSelector:NSSelectorFromString(selector)]
+        ? ((id (*)(id, SEL))objc_msgSend)(type, NSSelectorFromString(selector)) : nil;
+}
+static void SSReply(id receiver, NSString *selector, id value) {
+    if ([receiver respondsToSelector:NSSelectorFromString(selector)])
+        ((void (*)(id, SEL, id))objc_msgSend)(receiver, NSSelectorFromString(selector), value);
+}
+
+@interface SSStikDebugHostSession : NSObject <NSXPCListenerDelegate, SSStikDebugHelperHost>
+@property(strong) id receiver;
+@property(strong) NSXPCListener *listener;
+@property(strong) NSXPCConnection *connection;
+@property(strong) NSExtension *child;
+@property BOOL finished;
+@end
+
+static NSMutableSet *SSActiveSessions;
+@implementation SSStikDebugHostSession
+- (BOOL)listener:(NSXPCListener *)listener shouldAcceptNewConnection:(NSXPCConnection *)connection {
+    if (self.connection || self.finished) return NO;
+    self.connection = connection;
+    connection.exportedInterface = [NSXPCInterface interfaceWithProtocol:@protocol(SSStikDebugHelperHost)];
+    connection.exportedObject = self;
+    __weak typeof(self) weakSelf = self;
+    connection.invalidationHandler = ^{ dispatch_async(dispatch_get_main_queue(), ^{
+        if (!weakSelf.finished) [weakSelf finish:SSFailure(@"内置 JIT 辅助进程连接中断。")];
+    }); };
+    [connection resume];
+    return YES;
+}
+- (void)reportProgress:(NSString *)message {
+    dispatch_async(dispatch_get_main_queue(), ^{ if (!self.finished) SSReply(self.receiver, @"progress:", message); });
+}
+- (void)reportResult:(NSDictionary *)result withReply:(void (^)(void))reply {
+    dispatch_async(dispatch_get_main_queue(), ^{
+        // Acknowledge before tearing down XPC, so the helper can remove its file.
+        if (reply) reply();
+        [self finish:result];
+    });
+}
+- (void)finish:(NSDictionary *)result {
+    if (self.finished) return;
+    self.finished = YES;
+    SSReply(self.receiver, @"complete:", result);
+    self.receiver = nil;
+    [self.listener invalidate];
+    self.listener = nil;
+    NSXPCConnection *connection = self.connection;
+    self.connection = nil;
+    dispatch_after(dispatch_time(DISPATCH_TIME_NOW, NSEC_PER_SEC), dispatch_get_main_queue(), ^{ [connection invalidate]; self.child = nil; });
+    [SSActiveSessions removeObject:self];
+}
+@end
+
+void SSStikDebugExecuteInHelper(NSDictionary *request) {
+    dispatch_async(dispatch_get_main_queue(), ^{
+        id receiver = request[@"reply"];
+        if (!receiver) return;
+        if (SSActiveSessions.count > 0) { SSReply(receiver, @"complete:", SSFailure(@"已有内置 JIT 任务正在运行，请等待完成。")); return; }
+        if (@available(iOS 17.4, *)) {} else { SSReply(receiver, @"complete:", SSFailure(@"内置 JIT 需要 iOS 17.4 或更新版本。")); return; }
+        NSString *hostPath = request[@"hostBundlePath"];
+        NSBundle *host = [hostPath isKindOfClass:NSString.class] ? [NSBundle bundleWithPath:hostPath] : nil;
+        if (!host.builtInPlugInsURL) { SSReply(receiver, @"complete:", SSFailure(@"无法定位当前二合一宿主及扩展目录。")); return; }
+        NSBundle *extension = [NSBundle bundleWithURL:[host.builtInPlugInsURL URLByAppendingPathComponent:@"LiveProcess.appex"]];
+        NSError *error;
+        NSExtension *child = extension ? [NSExtension extensionWithIdentifier:extension.bundleIdentifier error:&error] : nil;
+        if (!child) { SSReply(receiver, @"complete:", SSFailure(error.localizedDescription ?: @"缺少 LiveProcess 扩展。请保留原有扩展重新安装。")); return; }
+        NSMutableDictionary *payload = request.mutableCopy;
+        [payload removeObjectForKey:@"reply"];
+        [payload removeObjectForKey:@"hostBundlePath"];
+        if (![request[@"operation"] isEqual:@"reset"]) {
+            NSData *pairing = [NSData dataWithContentsOfFile:request[@"pairingPath"] options:0 error:&error];
+            if (!pairing || pairing.length == 0 || pairing.length > 1024 * 1024) {
+                SSReply(receiver, @"complete:", SSFailure(error.localizedDescription ?: @"Remote Pairing 文件为空或过大。")); return;
+            }
+            payload[@"pairingData"] = pairing;
+        }
+        [payload removeObjectForKey:@"pairingPath"];
+        static dispatch_once_t once;
+        dispatch_once(&once, ^{ SSActiveSessions = [NSMutableSet new]; });
+        SSStikDebugHostSession *session = [SSStikDebugHostSession new];
+        session.receiver = receiver;
+        session.child = child;
+        session.listener = [NSXPCListener anonymousListener];
+        session.listener.delegate = session;
+        [session.listener resume];
+        [SSActiveSessions addObject:session];
+        NSBundle *core = [NSBundle bundleForClass:NSClassFromString(@"SSStikDebugCore")];
+        if (!core.executablePath) { [session finish:SSFailure(@"无法定位内置 JIT 核心可执行文件。")]; return; }
+        NSExtensionItem *item = [NSExtensionItem new];
+        item.userInfo = @{ @"customPayloadDylib": core.executablePath,
+            @"customPayloadEntry": @"SSStikDebugHelperMain", @"SSStikDebugRequest": payload,
+            @"SSStikDebugEndpoint": session.listener.endpoint };
+        __weak SSStikDebugHostSession *weakSession = session;
+        [child setRequestCancellationBlock:^(NSUUID *identifier, NSError *failure) { dispatch_async(dispatch_get_main_queue(), ^{
+            [weakSession finish:SSFailure(failure.localizedDescription ?: @"内置 JIT 辅助进程被取消。")];
+        }); }];
+        [child setRequestInterruptionBlock:^(NSUUID *identifier) { dispatch_async(dispatch_get_main_queue(), ^{
+            [weakSession finish:SSFailure(@"内置 JIT 辅助进程提前退出。")];
+        }); }];
+        [child beginExtensionRequestWithInputItems:@[item] completion:^(NSUUID *identifier) {
+            if (!identifier) dispatch_async(dispatch_get_main_queue(), ^{ [weakSession finish:SSFailure(@"无法启动内置 JIT 辅助进程。")]; });
+        }];
+        dispatch_after(dispatch_time(DISPATCH_TIME_NOW, 600 * NSEC_PER_SEC), dispatch_get_main_queue(), ^{
+            SSStikDebugHostSession *active = weakSession;
+            if (active && !active.finished) {
+                [active.child _kill:SIGKILL];
+                [active finish:SSFailure(@"内置 JIT 超时，辅助进程已结束。请检查目标 App 的 JIT 协议和连接。")];
+            }
+        });
+    });
+}
+
+@interface SSStikDebugChildReply : NSObject
+@property(strong) NSXPCConnection *connection;
+@property(strong) NSURL *pairingURL;
+@property BOOL finished;
+@end
+@implementation SSStikDebugChildReply
+- (void)progress:(NSString *)message { [[self.connection remoteObjectProxy] reportProgress:message]; }
+- (void)complete:(NSDictionary *)result {
+    if (self.pairingURL) [NSFileManager.defaultManager removeItemAtURL:self.pairingURL error:nil];
+    __weak typeof(self) weakSelf = self;
+    id<SSStikDebugHelperHost> proxy = [self.connection remoteObjectProxyWithErrorHandler:^(NSError *error) { weakSelf.finished = YES; }];
+    [proxy reportResult:result withReply:^{ weakSelf.finished = YES; }];
+}
+@end
+
+__attribute__((visibility("default")))
+int SSStikDebugHelperMain(int argc, char **argv, char **envp, char **apple) {
+    @autoreleasepool {
+        NSDictionary *info = SSClassValue(@"LiveProcessHandler", @"retrievedAppInfo");
+        NSExtensionContext *context = SSClassValue(@"LiveProcessHandler", @"extensionContext");
+        NSXPCListenerEndpoint *endpoint = info[@"SSStikDebugEndpoint"];
+        if (!endpoint) return 1;
+        SSStikDebugChildReply *reply = [SSStikDebugChildReply new];
+        reply.connection = [[NSXPCConnection alloc] initWithListenerEndpoint:endpoint];
+        reply.connection.remoteObjectInterface = [NSXPCInterface interfaceWithProtocol:@protocol(SSStikDebugHelperHost)];
+        __weak SSStikDebugChildReply *weakReply = reply;
+        reply.connection.invalidationHandler = ^{ weakReply.finished = YES; };
+        [reply.connection resume];
+        NSMutableDictionary *request = [info[@"SSStikDebugRequest"] mutableCopy];
+        NSError *error;
+        if (request[@"pairingData"]) {
+            reply.pairingURL = [NSURL fileURLWithPath:[NSTemporaryDirectory() stringByAppendingPathComponent:NSUUID.UUID.UUIDString]];
+            NSData *pairing = request[@"pairingData"];
+            if (![pairing writeToURL:reply.pairingURL options:NSDataWritingAtomic | NSDataWritingFileProtectionCompleteUntilFirstUserAuthentication error:&error]) {
+                [reply complete:SSFailure(error.localizedDescription)];
+            } else {
+                [NSFileManager.defaultManager setAttributes:@{NSFilePosixPermissions: @0600} ofItemAtPath:reply.pairingURL.path error:nil];
+                request[@"pairingPath"] = reply.pairingURL.path;
+            }
+            [request removeObjectForKey:@"pairingData"];
+        }
+        if (!error) {
+            request[@"reply"] = reply;
+            id core = SSClassValue(@"SSStikDebugCore", @"shared");
+            SSReply(core, @"execute:", request);
+        }
+        while (!reply.finished) CFRunLoopRunInMode(kCFRunLoopDefaultMode, 0.1, true);
+        if (reply.pairingURL) [NSFileManager.defaultManager removeItemAtURL:reply.pairingURL error:nil];
+        [reply.connection invalidate];
+        [context completeRequestReturningItems:@[] completionHandler:nil];
+        return 0;
+    }
+}
+
+NSDictionary *SSStikDebugContainerApps(NSDictionary *request) {
+    NSString *home = request[@"hostHome"];
+    if (![home isKindOfClass:NSString.class] || !home.isAbsolutePath) return SSFailure(@"无法确定 LiveContainer 主目录。请在二合一主实例中操作。");
+    NSURL *privateApps = [NSURL fileURLWithPath:[home stringByAppendingPathComponent:@"Documents/Applications"]];
+    NSURL *group = SSClassValue(@"LCSharedUtils", @"appGroupPath");
+    NSMutableArray *roots = [NSMutableArray arrayWithObject:privateApps];
+    if (group) [roots addObject:[group URLByAppendingPathComponent:@"LiveContainer/Applications"]];
+    NSMutableArray *apps = [NSMutableArray new];
+    for (NSURL *root in roots) {
+        for (NSURL *url in [NSFileManager.defaultManager contentsOfDirectoryAtURL:root includingPropertiesForKeys:nil options:NSDirectoryEnumerationSkipsHiddenFiles error:nil]) {
+            if (![url.pathExtension isEqual:@"app"]) continue;
+            NSDictionary *config = [NSDictionary dictionaryWithContentsOfURL:[url URLByAppendingPathComponent:@"LCAppInfo.plist"]];
+            if ((config[@"isHidden"] && ![config[@"isHidden"] isKindOfClass:NSNumber.class]) ||
+                (config[@"isLocked"] && ![config[@"isLocked"] isKindOfClass:NSNumber.class])) continue;
+            if ([config[@"isHidden"] boolValue] || [config[@"isLocked"] boolValue]) continue;
+            NSDictionary *info = [NSDictionary dictionaryWithContentsOfURL:[url URLByAppendingPathComponent:@"Info.plist"]];
+            NSString *identifier = info[@"CFBundleIdentifier"];
+            if (![identifier isKindOfClass:NSString.class]) continue;
+            NSString *name = info[@"CFBundleDisplayName"] ?: info[@"CFBundleName"] ?: identifier;
+            if (![name isKindOfClass:NSString.class]) name = identifier;
+            [apps addObject:@{ @"name": name, @"bundleID": identifier,
+                @"folderName": url.lastPathComponent, @"source": @"container",
+                @"shared": [root isEqual:privateApps] ? @"false" : @"true" }];
+        }
+    }
+    return @{ @"apps": apps };
+}
+
+NSDictionary *SSStikDebugLaunchContainer(NSDictionary *request) {
+    NSString *folder = request[@"folderName"];
+    NSArray *apps = SSStikDebugContainerApps(request)[@"apps"];
+    BOOL found = NO;
+    for (NSDictionary *app in apps) if ([app[@"folderName"] isEqual:folder] && [app[@"shared"] isEqual:request[@"shared"]]) { found = YES; break; }
+    if (!found) return SSFailure(@"容器 App 已不存在或不可见，请重新读取列表。");
+    NSUserDefaults *defaults = SSClassValue(@"NSUserDefaults", @"lcUserDefaults");
+    Class utilities = NSClassFromString(@"LCSharedUtils");
+    if (!defaults || !utilities) return SSFailure(@"当前实例无法切换到 LiveContainer。");
+    [defaults setObject:@{ @"folderName": folder, @"shared": request[@"shared"] } forKey:@"SSBuiltInJITPendingContainer"];
+    [defaults setObject:@"ui" forKey:@"selected"];
+    [defaults removeObjectForKey:@"selectedContainer"];
+    [defaults removeObjectForKey:@"launchAppUrlScheme"];
+    [defaults setBool:NO forKey:@"LCOpenSideStore"];
+    BOOL result = ((BOOL (*)(id, SEL, NSUInteger))objc_msgSend)(utilities, NSSelectorFromString(@"launchToGuestAppWithClassicMode:"), 0);
+    return result ? @{} : SSFailure(@"切换到 LiveContainer 失败。");
+}

@@ -51,7 +51,8 @@ GitHub Fork 的定时工作流需要先启用，并且仅在默认分支运行�
 `inputs.lock.json` 中 `files` 的 SHA-256；自定义功能补丁不需要修改这组摘要。
 
 已加入 [StikDebug JIT 与配对管理](custom/StikDebug/README.md)实验入口，使用按需加载的 StikJIT 核心。
-不增加 VPN、应用扩展或 App ID；仍需外置 LocalDevVPN，且不能调试当前二合一进程自身。
+提供长按 App 启用 JIT、容器 App 搜索，以及 LiveContainer 的“内置 JIT”工具选项。
+容器调试复用既有 LiveProcess 的独立辅助实例，不增加 VPN、应用扩展或 App ID；仍需外置 LocalDevVPN。
 极简版已停用，保留历史提交与附件，后续只维护本普通版工作流。
 
 自定义功能入口是 [custom/series.json](custom/series.json)，SideStore 列表包含 StikDebug 实验入口。

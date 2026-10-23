@@ -1,3 +1,32 @@
+diff --git a/AltStore/My Apps/MyAppsViewController.swift b/AltStore/My Apps/MyAppsViewController.swift
+index 6017d2799abbd36e85eb5cc8e113e4344995032d..721999ec35708865a483667e6e09a1a702fc49d1 100644
+--- a/AltStore/My Apps/MyAppsViewController.swift	
++++ b/AltStore/My Apps/MyAppsViewController.swift	
+@@ -1752,17 +1752,14 @@ private extension MyAppsViewController
+     }
+     
+     func enableJIT(for installedApp: InstalledApp) {
+-        AppManager.shared.enableJIT(for: installedApp) { result in
+-            DispatchQueue.main.async {
+-                switch result {
+-                case .success:
+-                    break
+-                case .failure(let error):
+-                    ToastView(error: error, opensLog: true).show(in: self)
+-                    AppManager.shared.log(error, operation: .enableJIT, app: installedApp)
+-                }
+-            }
++        guard #available(iOS 17.4, *) else {
++            ToastView(text: "内置 JIT 需要 iOS 17.4 或更新版本。", detailText: nil).show(in: self)
++            return
+         }
++        let view = SideStoreStikDebugView(initialBundleID: installedApp.resignedBundleIdentifier, initialName: installedApp.name)
++        let controller = UIHostingController(rootView: view)
++        controller.view.backgroundColor = .settingsBackground
++        navigationController?.pushViewController(controller, animated: true)
+     }
+ }
+ 
 diff --git a/SideStore/Views/Settings/Diagnostics/ExperimentalFeaturesView.swift b/SideStore/Views/Settings/Diagnostics/ExperimentalFeaturesView.swift
 index 362f06c74483a1fcea40e9665086898c953c8d44..1dc7c55e0a9bbe038d4f0b807a0e67ab16068d75 100644
 --- a/SideStore/Views/Settings/Diagnostics/ExperimentalFeaturesView.swift
