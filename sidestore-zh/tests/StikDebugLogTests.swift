@@ -23,9 +23,6 @@ struct StikDebugLogTests {
         assert(first.text == frozen && second.id != first.id)
         assert(!second.text.contains("code: 7"), "Old logs must not leak into another task")
 
-        second.notePresentationIssue("系统拒绝画中画")
-        assert(second.finished && !second.failed && second.text.contains("系统拒绝画中画"))
-        assert(first.text == frozen)
-        print("PASS: copyable terminal errors, task isolation, bounded logs and PiP/JIT outcome separation")
+        print("PASS: copyable terminal errors, task isolation and bounded logs")
     }
 }

@@ -4,24 +4,14 @@ import Darwin
 @available(iOS 17.4, *)
 @MainActor
 enum SideStoreJITQuickAction {
-    static func enable(bundleID: String, name: String, sourceScene: UIWindowScene?) -> String? {
+    static func enable(bundleID: String, name: String) -> String? {
         let model = StikDebugModel.shared
         if model.busy {
-            return SideStoreJITLogPictureInPicture.show(model.logSession, sourceScene: sourceScene)
-                ?? "已有 JIT 或设备准备任务正在运行，本次未重复提交；请等待当前任务完成。"
+            return "已有 JIT 或设备准备任务正在运行，本次未重复提交；请等待当前任务完成。"
         }
-        var preparedVideo = false
-        var presentationError: String?
         model.run("enable", bundleID: bundleID,
-            forceScript: UserDefaults.standard.bool(forKey: "SSStikDebugForceScript"), name: name,
-            beforeExecute: { session, execute in
-                preparedVideo = true
-                presentationError = SideStoreJITLogPictureInPicture.show(session, sourceScene: sourceScene, whenReady: execute)
-            })
-        // Show preflight failures too. Starting JIT never depends on navigation
-        // or a view's onAppear; PiP failure/timeout still releases execute once.
-        if !preparedVideo { presentationError = SideStoreJITLogPictureInPicture.show(model.logSession, sourceScene: sourceScene) }
-        return presentationError
+            forceScript: UserDefaults.standard.bool(forKey: "SSStikDebugForceScript"), name: name)
+        return model.error
     }
 }
 
@@ -59,8 +49,7 @@ private final class StikDebugModel: NSObject, ObservableObject {
         apps = []
     }
 
-    func run(_ operation: String, bundleID: String? = nil, forceScript: Bool = false, name: String? = nil,
-             beforeExecute: ((StikDebugLogSession, @escaping () -> Void) -> Void)? = nil) {
+    func run(_ operation: String, bundleID: String? = nil, forceScript: Bool = false, name: String? = nil) {
         guard !busy else { return }
         error = nil
         busy = true
@@ -106,11 +95,7 @@ private final class StikDebugModel: NSObject, ObservableObject {
             }
             // Keep the already verified desktop-App path. Only container PID
             // requests from LiveContainer use the separate helper process.
-            let execute = { [self] in
-                _ = core?.perform(NSSelectorFromString("execute:"), with: request as NSDictionary)
-            }
-            if let beforeExecute { beforeExecute(logSession, execute) }
-            else { execute() }
+            _ = core?.perform(NSSelectorFromString("execute:"), with: request as NSDictionary)
         } catch {
             self.error = error.localizedDescription
             status = "未完成"
@@ -278,9 +263,6 @@ private struct StikDebugToolsView: View {
             }
             if !model.logs.isEmpty {
                 Section(header: Text("本次进度")) {
-                    SwiftUI.Button("开启日志画中画") {
-                        if let message = SideStoreJITLogPictureInPicture.show(model.logSession, sourceScene: nil) { model.error = message }
-                    }
                     SwiftUI.Button("复制全部日志") { UIPasteboard.general.string = model.logSession.text }
                     Text(model.logSession.text).font(.caption.monospaced()).textSelection(.enabled)
                 }
@@ -304,7 +286,7 @@ private struct StikDebugToolsView: View {
             Alert(title: Text("为 \(target.name) 启用 JIT？"), message: Text("会启动目标并连接调试器。此过程不会为缺少权限或不兼容协议的 App 补充 JIT 支持。"), primaryButton: .default(Text("启用")) {
                 if let container = target.container { model.launchContainer(container) }
                 else {
-                    if let message = SideStoreJITQuickAction.enable(bundleID: target.id, name: target.name, sourceScene: nil) { model.error = message }
+                    if let message = SideStoreJITQuickAction.enable(bundleID: target.id, name: target.name) { model.error = message }
                 }
             }, secondaryButton: .cancel(Text("取消")))
         }

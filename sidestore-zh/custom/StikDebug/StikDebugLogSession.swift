@@ -1,8 +1,7 @@
 import Foundation
 import Combine
 
-// Each log view owns one immutable task identity. A later JIT operation
-// must not replace the text being inspected/copied in an older window.
+// Keep each task's progress and terminal result together for copying.
 @MainActor
 final class StikDebugLogSession: ObservableObject, Identifiable {
     let id: UUID
@@ -14,8 +13,6 @@ final class StikDebugLogSession: ObservableObject, Identifiable {
     @Published private(set) var status = "准备中"
     @Published private(set) var finished = false
     @Published private(set) var failed = false
-    @Published private(set) var revision = 0
-    @Published private(set) var presentationIssue: String?
     private(set) var omittedCount = 0
 
     init(name: String, bundleID: String? = nil, limit: Int = 2000, id: UUID = UUID(), startedAt: Date = Date()) {
@@ -35,7 +32,6 @@ final class StikDebugLogSession: ObservableObject, Identifiable {
             entries.removeFirst(excess)
             omittedCount += excess
         }
-        revision += 1
     }
 
     func update(_ message: String) {
@@ -52,18 +48,11 @@ final class StikDebugLogSession: ObservableObject, Identifiable {
         finished = true
     }
 
-    func notePresentationIssue(_ message: String) {
-        // A PiP failure must never change the actual JIT outcome.
-        presentationIssue = message
-        revision += 1
-    }
-
     var text: String {
         var header = ["JIT 日志", "目标：" + name]
         if let bundleID { header.append("Bundle ID：" + bundleID) }
         header.append("开始：" + ISO8601DateFormatter().string(from: startedAt))
         header.append("状态：" + status)
-        if let presentationIssue { header.append("日志画中画：" + presentationIssue) }
         if omittedCount > 0 { header.append("较早的 \(omittedCount) 条日志已省略。") }
         return header.joined(separator: "\n") + "\n\n" + entries.joined(separator: "\n")
     }

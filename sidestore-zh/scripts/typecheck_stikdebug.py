@@ -11,8 +11,7 @@ sdk = subprocess.check_output(['xcrun', '--sdk', 'iphoneos', '--show-sdk-path'],
 command = ['xcrun', '--sdk', 'iphoneos', 'swiftc', '-typecheck', '-swift-version', '5', '-sdk', sdk,
            '-target', 'arm64-apple-ios15.0']
 ui = args.source / 'SideStore/Views/Settings/Diagnostics/SideStoreStikDebugView.swift'
-command += [str(ui), str(ui.with_name('StikDebugLogSession.swift')), str(ui.with_name('StikDebugLogVideoRenderer.swift')),
-            str(ui.with_name('SideStoreJITLogPictureInPicture.swift')),
+command += [str(ui), str(ui.with_name('StikDebugLogSession.swift')),
             str(args.source / 'SideStore/Views/Settings/Diagnostics/ExperimentalFeaturesView.swift'),
             str(args.source / 'AltStore/Components/Button.swift'), str(root / 'tests/StikDebugUIStubs.swift')]
 subprocess.run(command, check=True)

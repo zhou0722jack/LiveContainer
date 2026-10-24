@@ -1,5 +1,5 @@
 diff --git a/AltStore/My Apps/MyAppsViewController.swift b/AltStore/My Apps/MyAppsViewController.swift
-index 6017d2799abbd36e85eb5cc8e113e4344995032d..4a63c03db5c3923a8e9b55e6297a676bd912928a 100644
+index 6017d2799abbd36e85eb5cc8e113e4344995032d..594eb9c2173c4e5df33004b30d8f29dd0a7a9fa7 100644
 --- a/AltStore/My Apps/MyAppsViewController.swift	
 +++ b/AltStore/My Apps/MyAppsViewController.swift	
 @@ -1752,16 +1752,14 @@ private extension MyAppsViewController
@@ -20,9 +20,9 @@ index 6017d2799abbd36e85eb5cc8e113e4344995032d..4a63c03db5c3923a8e9b55e6297a676b
 +            ToastView(text: "内置 JIT 需要 iOS 17.4 或更新版本。", detailText: nil).show(in: self)
 +            return
 +        }
-+        // Enable directly; the system PiP viewer presents this task's logs.
++        // Enable directly without navigating away from My Apps.
 +        if let message = SideStoreJITQuickAction.enable(bundleID: installedApp.resignedBundleIdentifier,
-+            name: installedApp.name, sourceScene: view.window?.windowScene) {
++            name: installedApp.name) {
 +            ToastView(text: message, detailText: nil).show(in: self)
          }
      }
