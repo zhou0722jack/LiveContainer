@@ -15,7 +15,7 @@ enum SideStoreJITLogPictureInPicture {
             return nil
         }
         guard AVPictureInPictureController.isPictureInPictureSupported() else {
-            let message = "此设备不支持系统画中画；JIT 仍会执行，可在实验页查看并复制日志。"
+            let message = "此设备不支持系统画中画；请在实验页查看 JIT 结果并复制日志。"
             session.notePresentationIssue(message)
             whenReady()
             return message
@@ -23,7 +23,7 @@ enum SideStoreJITLogPictureInPicture {
         let scene = sourceScene ?? UIApplication.shared.connectedScenes.compactMap { $0 as? UIWindowScene }
             .first { $0.activationState == .foregroundActive }
         guard let window = scene?.windows.first(where: { $0.isKeyWindow }) ?? scene?.windows.first(where: { !$0.isHidden }) else {
-            let message = "无法定位日志视频的播放场景；JIT 仍会执行。"
+            let message = "无法定位日志视频的播放场景；请在实验页查看 JIT 结果。"
             session.notePresentationIssue(message)
             whenReady()
             return message
@@ -133,7 +133,7 @@ private final class StikDebugPiPController: NSObject, AVPictureInPictureControll
                 guard let self, !self.controller.isPictureInPictureActive, !self.closed else { return }
                 let layer = self.sourceView.displayLayer
                 let detail = "possible=\(self.controller.isPictureInPicturePossible), layerStatus=\(layer.status.rawValue)"
-                self.stopWithIssue("系统未在时限内开启日志画中画（\(detail)）；已继续执行 JIT，可在实验页查看日志。")
+                self.stopWithIssue("系统未在时限内开启日志画中画（\(detail)）；不会取消已提交的 JIT 请求，请在实验页查看实际结果。")
             }
         }
     }
