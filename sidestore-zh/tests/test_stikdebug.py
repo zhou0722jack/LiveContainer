@@ -25,7 +25,9 @@ class StikPackagingTests(unittest.TestCase):
                 extension = source / 'PlugIns' / (name + '.appex')
                 extension.mkdir()
                 (extension / 'Info.plist').write_bytes(plistlib.dumps({'CFBundleIdentifier': 'com.kdt.livecontainer.' + name}))
-            (source / 'Info.plist').write_bytes(plistlib.dumps({'CFBundleIdentifier': 'com.kdt.livecontainer'}))
+            (source / 'Info.plist').write_bytes(plistlib.dumps({'CFBundleIdentifier': 'com.kdt.livecontainer',
+                'LSApplicationCategoryType': 'public.app-category.education', 'LSSupportsGameMode': False,
+                'GCSupportsGameMode': False}))
             (source / 'Settings.bundle/Root.plist').write_bytes(plistlib.dumps({'PreferenceSpecifiers': []}))
             core = work / 'stikdebug-products/SideStoreStikDebugCore.framework'
             core.mkdir(parents=True)
@@ -34,7 +36,11 @@ class StikPackagingTests(unittest.TestCase):
             with patch.object(pipeline, 'run') as run:
                 pipeline.make_host_baseline(work)
             host = work / 'lc-base/Payload/LiveContainer.app'
-            self.assertEqual(plistlib.loads((host / 'Info.plist').read_bytes())['CFBundleIdentifier'], 'com.kdt.livecontainer')
+            info = plistlib.loads((host / 'Info.plist').read_bytes())
+            self.assertEqual(info['CFBundleIdentifier'], 'com.kdt.livecontainer')
+            self.assertEqual(info['LSApplicationCategoryType'], 'public.app-category.games')
+            self.assertIs(info['LSSupportsGameMode'], True)
+            self.assertIs(info['GCSupportsGameMode'], True)
             self.assertEqual({p.name for p in (host / 'PlugIns').iterdir()}, {p.name for p in (source / 'PlugIns').iterdir()})
             self.assertEqual((host / 'Frameworks/SideStoreStikDebugCore.framework/SideStoreStikDebugCore').read_bytes(), b'component fixture')
             self.assertIn('a' * 40, (host / 'StikDebug-SOURCE.txt').read_text())

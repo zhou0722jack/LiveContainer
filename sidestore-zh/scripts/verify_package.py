@@ -48,6 +48,9 @@ with zipfile.ZipFile(ipa) as package, zipfile.ZipFile(WORK / 'lc-nightly.ipa') a
     widget_info = plistlib.loads(package.read(widget + 'Info.plist'))
     old_info = plistlib.loads(old.read(top + 'Info.plist'))
     new_info = plistlib.loads(new.read('Payload/SideStore.app/Info.plist'))
+    check('host_game_category', host_info.get('LSApplicationCategoryType') == 'public.app-category.games')
+    check('host_game_mode_supported', host_info.get('LSSupportsGameMode') is True)
+    check('host_game_mode_legacy_supported', host_info.get('GCSupportsGameMode') is True)
     check('host_version_matches_build', host_info['CFBundleShortVersionString'] == old_info['CFBundleShortVersionString'])
     check('guest_version_matches_build', guest_info['CFBundleShortVersionString'] == new_info['CFBundleShortVersionString'])
     check('widget_identity', widget_info['CFBundleIdentifier'] == 'com.kdt.livecontainer.LiveWidget'

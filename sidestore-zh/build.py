@@ -245,6 +245,11 @@ def make_host_baseline(work):
         'Integration source and build recipe: source-recipe.zip in this Actions artifact.\n')
     path = host / 'Info.plist'
     info = plistlib.loads(path.read_bytes())
+    # LaunchServices registers the installed host, including when it runs a
+    # guest in its main process. Declare Game Mode at that outer app boundary.
+    info['LSApplicationCategoryType'] = 'public.app-category.games'
+    info['LSSupportsGameMode'] = True  # iOS / iPadOS 18.6 and newer
+    info['GCSupportsGameMode'] = True  # iOS / iPadOS 18.0–18.5 compatibility
     groups = info.setdefault('ALTAppGroups', [])
     if 'group.com.SideStore.SideStore' not in groups:
         groups.append('group.com.SideStore.SideStore')
@@ -296,6 +301,7 @@ def package(root):
     report = read_json(out / 'verification-zh.json')
     report['translation_entries'] = len(table)
     report['ui_visual_validation'] = 'UNRUN'
+    report['game_mode_automatic_activation'] = 'UNRUN'
     provenance = read_json(work / 'build-provenance.json')
     provenance['package_recipe'] = {name: digest(path) for path, name in recipe_files()}
     write_json(out / 'build-provenance.json', provenance)
