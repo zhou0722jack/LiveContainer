@@ -1,6 +1,30 @@
 import SwiftUI
 import Darwin
 
+@available(iOS 17.4, *)
+@MainActor
+enum SideStoreJITQuickAction {
+    static func enable(bundleID: String, name: String, sourceScene: UIWindowScene?) -> String? {
+        let model = StikDebugModel.shared
+        if model.busy {
+            return SideStoreJITLogPictureInPicture.show(model.logSession, sourceScene: sourceScene)
+                ?? "已有 JIT 或设备准备任务正在运行，本次未重复提交；请等待当前任务完成。"
+        }
+        var preparedVideo = false
+        var presentationError: String?
+        model.run("enable", bundleID: bundleID,
+            forceScript: UserDefaults.standard.bool(forKey: "SSStikDebugForceScript"), name: name,
+            beforeExecute: { session, execute in
+                preparedVideo = true
+                presentationError = SideStoreJITLogPictureInPicture.show(session, sourceScene: sourceScene, whenReady: execute)
+            })
+        // Show preflight failures too. Starting JIT never depends on navigation
+        // or a view's onAppear; PiP failure/timeout still releases execute once.
+        if !preparedVideo { presentationError = SideStoreJITLogPictureInPicture.show(model.logSession, sourceScene: sourceScene) }
+        return presentationError
+    }
+}
+
 struct SideStoreStikDebugView: View {
     var initialBundleID: String? = nil
     var initialName: String? = nil
@@ -16,13 +40,15 @@ struct SideStoreStikDebugView: View {
 @available(iOS 17.4, *)
 @MainActor
 private final class StikDebugModel: NSObject, ObservableObject {
+    static let shared = StikDebugModel()
     @Published var busy = false
     @Published var status = "尚未准备"
     @Published var error: String?
     @Published var apps: [[String: String]] = []
     @Published var containers: [[String: String]] = []
     @Published var containerError: String?
-    @Published var logs: [String] = []
+    @Published var logSession = StikDebugLogSession(name: "StikDebug")
+    var logs: [String] { logSession.entries }
     private var library: UnsafeMutableRawPointer?
     private var core: NSObject?
     private var backgroundTask = UIBackgroundTaskIdentifier.invalid
@@ -33,10 +59,18 @@ private final class StikDebugModel: NSObject, ObservableObject {
         apps = []
     }
 
-    func run(_ operation: String, bundleID: String? = nil, forceScript: Bool = false) {
+    func run(_ operation: String, bundleID: String? = nil, forceScript: Bool = false, name: String? = nil,
+             beforeExecute: ((StikDebugLogSession, @escaping () -> Void) -> Void)? = nil) {
         guard !busy else { return }
         error = nil
+        busy = true
+        status = "正在检查…"
+        logSession = StikDebugLogSession(name: name ?? bundleID ?? operation, bundleID: bundleID)
+        logSession.update("开始操作：" + operation)
         do {
+            if operation == "enable", bundleID == Bundle.Info.activeBundleIdentifier {
+                throw failure("这是当前二合一宿主，不能从当前进程为自身启用 JIT。请从内置 JIT 页面选择容器 App。")
+            }
             if core == nil {
                 let path = Bundle.Info.activeBundleURL.appendingPathComponent("Frameworks/SideStoreStikDebugCore.framework/SideStoreStikDebugCore").path
                 library = dlopen(path, RTLD_NOW | RTLD_LOCAL)
@@ -62,9 +96,8 @@ private final class StikDebugModel: NSObject, ObservableObject {
                 "pairingPath": pairing.path, "address": address, "port": effectivePort,
                 "forceScript": forceScript, "excludedBundleIDs": [Bundle.Info.activeBundleIdentifier, "com.SideStore.SideStore"]]
             if let bundleID { request["bundleID"] = bundleID }
-            busy = true
             status = "正在处理…"
-            logs = []
+            logSession.update(status)
             if operation == "reset" { apps = [] }
             backgroundTask = UIApplication.shared.beginBackgroundTask(withName: "StikDebug JIT") { [weak self] in
                 guard let self else { return }
@@ -73,8 +106,18 @@ private final class StikDebugModel: NSObject, ObservableObject {
             }
             // Keep the already verified desktop-App path. Only container PID
             // requests from LiveContainer use the separate helper process.
-            _ = core?.perform(NSSelectorFromString("execute:"), with: request as NSDictionary)
-        } catch { self.error = error.localizedDescription; status = "未完成" }
+            let execute = { [self] in
+                _ = core?.perform(NSSelectorFromString("execute:"), with: request as NSDictionary)
+            }
+            if let beforeExecute { beforeExecute(logSession, execute) }
+            else { execute() }
+        } catch {
+            self.error = error.localizedDescription
+            status = "未完成"
+            busy = false
+            endBackgroundTask()
+            logSession.finish(message: error.localizedDescription, error: true)
+        }
     }
 
     private func hostHome() throws -> String {
@@ -130,19 +173,22 @@ private final class StikDebugModel: NSObject, ObservableObject {
     }
 
     @objc func progress(_ text: String) {
+        guard busy else { return }
         status = text
-        logs.append(text)
-        if logs.count > 120 { logs.removeFirst(logs.count - 120) }
+        logSession.update(text)
     }
 
     @objc func complete(_ reply: NSDictionary) {
+        guard busy else { return }
         busy = false
         endBackgroundTask()
         if let message = reply["error"] as? String {
             error = message
             status = "未完成"
+            logSession.finish(message: message, error: true)
         } else {
             status = reply["message"] as? String ?? "处理完成"
+            logSession.finish(message: status)
             if let apps = reply["apps"] as? [[String: String]] { self.apps = apps }
         }
     }
@@ -163,7 +209,7 @@ private struct StikDebugToolsView: View {
     let initialBundleID: String?
     let initialName: String?
     @State private var didStartTarget = false
-    @StateObject private var model = StikDebugModel()
+    @StateObject private var model = StikDebugModel.shared
     @AppStorage("SSStikDebugForceScript") private var forceScript = false
     @State private var selectedApp: StikTarget?
     @State private var confirmReset = false
@@ -177,9 +223,9 @@ private struct StikDebugToolsView: View {
     var body: some View {
         SwiftUI.Form {
             if let initialName { Section(header: Text("当前目标")) { Text(initialName) } }
-            Section(header: Text("使用条件"), footer: Text("目标需有 get-task-allow，并启用开发者模式。iOS 26 的目标 App 还需支持 universal.js 协议。容器 App 会切换到 LiveContainer，以实际 LiveProcess PID 启用内置 JIT。")) {
+            Section(header: Text("使用条件"), footer: Text("目标需有 get-task-allow，并启用开发者模式。iOS 26 的目标 App 还需支持 universal.js 协议。容器 App 会切换到 LiveContainer，由辅助进程为重启后的宿主主进程开启 JIT，再普通全屏运行。")) {
                 Text("iOS 17.4+ · 先连接外置 LocalDevVPN")
-                Text("内置 StikJIT；容器 JIT 复用现有 LiveProcess，不新增 VPN 或应用扩展。")
+                Text("内置 StikJIT；容器 JIT 的辅助工作复用现有 LiveProcess，不新增 VPN 或应用扩展。")
                     .font(.footnote).foregroundColor(.secondary)
             }
             Section(header: Text("配对与连接")) {
@@ -232,7 +278,11 @@ private struct StikDebugToolsView: View {
             }
             if !model.logs.isEmpty {
                 Section(header: Text("本次进度")) {
-                    Text(model.logs.joined(separator: "\n")).font(.caption.monospaced()).textSelection(.enabled)
+                    SwiftUI.Button("开启日志画中画") {
+                        if let message = SideStoreJITLogPictureInPicture.show(model.logSession, sourceScene: nil) { model.error = message }
+                    }
+                    SwiftUI.Button("复制全部日志") { UIPasteboard.general.string = model.logSession.text }
+                    Text(model.logSession.text).font(.caption.monospaced()).textSelection(.enabled)
                 }
             }
             Section(header: Text("恢复与来源"), footer: Text("此功能是非官方实验性集成，真实错误会显示在页面。重置只清理本功能的 DDI 缓存，不删除配对文件。")) {
@@ -247,13 +297,15 @@ private struct StikDebugToolsView: View {
                 didStartTarget = true
                 if initialBundleID == Bundle.Info.activeBundleIdentifier {
                     model.status = "这是当前二合一宿主，请在容器 App 列表中选择要启动的 App。"
-                } else { model.run("enable", bundleID: initialBundleID, forceScript: forceScript) }
+                } else { model.run("enable", bundleID: initialBundleID, forceScript: forceScript, name: initialName) }
             } else { model.invalidate() }
         }
         .alert(item: $selectedApp) { target in
             Alert(title: Text("为 \(target.name) 启用 JIT？"), message: Text("会启动目标并连接调试器。此过程不会为缺少权限或不兼容协议的 App 补充 JIT 支持。"), primaryButton: .default(Text("启用")) {
                 if let container = target.container { model.launchContainer(container) }
-                else { model.run("enable", bundleID: target.id, forceScript: forceScript) }
+                else {
+                    if let message = SideStoreJITQuickAction.enable(bundleID: target.id, name: target.name, sourceScene: nil) { model.error = message }
+                }
             }, secondaryButton: .cancel(Text("取消")))
         }
         .alert("重置 DDI 缓存？", isPresented: $confirmReset) {

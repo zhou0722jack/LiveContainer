@@ -183,8 +183,9 @@ def prepare(root, args):
         shutil.copy2(BASE / 'custom/StikDebug' / name, work / name)
     shutil.copy2(BASE / 'custom/StikDebug/LCBuiltInJIT.swift',
                  work / 'LiveContainer/LiveContainerSwiftUI/Utilities/LCBuiltInJIT.swift')
-    shutil.copy2(BASE / 'custom/StikDebug/SideStoreStikDebugView.swift',
-                 source / 'SideStore/Views/Settings/Diagnostics/SideStoreStikDebugView.swift')
+    for name in ['SideStoreStikDebugView.swift', 'StikDebugLogSession.swift',
+                 'StikDebugLogVideoRenderer.swift', 'SideStoreJITLogPictureInPicture.swift']:
+        shutil.copy2(BASE / 'custom/StikDebug' / name, source / 'SideStore/Views/Settings/Diagnostics' / name)
     manifest = {name: {'files': snapshot(work / name),
                        'submodules': git(work / name, 'submodule', 'status', '--recursive')}
                 for name in candidate['sources']}

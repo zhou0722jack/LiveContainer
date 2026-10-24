@@ -84,6 +84,11 @@ with zipfile.ZipFile(ipa) as package, zipfile.ZipFile(WORK / 'lc-nightly.ipa') a
           and b'Mozilla Public License' in package.read(core + 'LICENSE-StikJIT.txt'))
     check('stikdebug_source_provenance', b'github.com/StikDebug/StikJIT/tree/' in package.read(top + 'StikDebug-SOURCE.txt'))
     check('stikdebug_ui_compiled', b'Frameworks/SideStoreStikDebugCore.framework/SideStoreStikDebugCore' in package.read(guest + 'SideStore'))
+    check('stikdebug_pip_log_compiled', b'SSStikDebugPiPController' in package.read(guest + 'SideStore'))
+    check('stikdebug_pip_system_framework', any(b'/AVKit.framework/AVKit' in data
+          for _, data in macho(package.read(guest + 'SideStore'))[1]))
+    check('stikdebug_pip_background_mode', 'audio' in host_info.get('UIBackgroundModes', [])
+          and 'audio' in guest_info.get('UIBackgroundModes', []))
     check('stikdebug_host_identifier_unchanged', host_info['CFBundleIdentifier'] == 'com.kdt.livecontainer')
     check('stikdebug_no_new_extensions', {name for name in names if name.endswith('.appex/Info.plist')} == {
         top + 'PlugIns/' + name + '.appex/Info.plist' for name in ['LiveProcess', 'LiveWidgetExtension', 'ShareExtension', 'LaunchAppExtension']})
@@ -180,6 +185,7 @@ report = {
     'stikdebug_device_pairing_ddi_jit': 'UNRUN',
     'stikdebug_container_search_and_helper_jit': 'UNRUN',
     'stikdebug_ordinary_fullscreen_main_process_jit': 'UNRUN',
+    'sidestore_quick_jit_system_pip_log_ui': 'UNRUN',
     'distribution_signing': 'Requires iloader to re-sign with user account. Ad-hoc signatures are not device installation authorization.'
 }
 (OUT / args.report).write_text(json.dumps(report, indent=2) + '\n')
